@@ -1,0 +1,14 @@
+.build/
+.tools/
+DerivedData*/
+Pods/
+Benchmark/private/
+Resources/*.gz
+Resources/*.sqlite*
+Resources/tessdata/
+Resources/sudachi/
+Native/target/
+Vendor/
+*.xcuserstate
+xcuserdata/
+.DS_Store
