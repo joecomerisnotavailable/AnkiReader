@@ -21,6 +21,7 @@ import Combine
     var onTap:((String)->Void)?
     var onSplit:((String)->Void)?
     var onMerge:((String,String)->Void)?
+    var onInvalidDrop:((String,String?)->Void)?
     func photoTap(_ occurrence:Occurrence) {
         activeOccurrenceID=occurrence.id; scrollWordID=occurrence.lexemeID; scrollRequest += 1
     }
@@ -228,6 +229,15 @@ final class PhotoScrollView: UIView, UIScrollViewDelegate, UIGestureRecognizerDe
         regions.filter { (visibleIDs.contains($0.occurrenceID) || (includingHidden && neighbors.contains($0.occurrenceID))) && path($0).contains(point) }
             .min { path($0).bounds.width*path($0).bounds.height < path($1).bounds.width*path($1).bounds.height }?.occurrenceID
     }
+    /// Drag targets are restricted before hit ranking. A large source box or an
+    /// overlapping unrelated OCR box must not mask the adjacent destination.
+    private func mergeTarget(at point:CGPoint)->String? {
+        regions.filter { neighbors.contains($0.occurrenceID) && path($0).contains(point) }
+            .min { a,b in
+                let x=path(a).bounds,y=path(b).bounds
+                return hypot(x.midX-point.x,x.midY-point.y)<hypot(y.midX-point.x,y.midY-point.y)
+            }?.occurrenceID
+    }
     @objc private func tapped(_ recognizer:UITapGestureRecognizer) { if let id=hit(recognizer.location(in:canvas)) { page.onTap?(id) } }
     @objc private func doubleTapped(_ recognizer:UITapGestureRecognizer) {
         cancelDrag()
@@ -251,7 +261,7 @@ final class PhotoScrollView: UIView, UIScrollViewDelegate, UIGestureRecognizerDe
             guard let id=sourceID else { return }
             let delta=CGPoint(x:point.x-pressPoint.x,y:point.y-pressPoint.y)
             let previous=targetID
-            dragSession.update(distance:Double(hypot(delta.x,delta.y)*scroll.zoomScale),candidate:hit(point,includingHidden:true))
+            dragSession.update(distance:Double(hypot(delta.x,delta.y)*scroll.zoomScale),candidate:mergeTarget(at:point))
             if previous != targetID { haptic.selectionChanged() }
             CATransaction.begin(); CATransaction.setDisableActions(true)
             for region in regions {
@@ -262,11 +272,12 @@ final class PhotoScrollView: UIView, UIScrollViewDelegate, UIGestureRecognizerDe
             }
             CATransaction.commit()
         case .ended:
+            let source=sourceID, moved=dragSession.moved, attempted=hit(point,includingHidden:true)
             let result=dragSession.end(); scroll.panGestureRecognizer.isEnabled=true; redraw()
             switch result {
             case .split(let source): page.onSplit?(source)
             case .merge(let source,let target): page.onMerge?(source,target)
-            case .cancelled: break
+            case .cancelled: if moved,let source { page.onInvalidDrop?(source,attempted) }
             }
         case .cancelled,.failed: cancelDrag()
         default: break
@@ -328,7 +339,7 @@ private final class GridGlyphView:UIView {
     }
 }
 
-private enum PhotoRaster {
+enum PhotoRaster {
     static func make(_ image:CGImage)->PageRaster? {
         let scale=min(1,2048/Double(max(image.width,image.height)))
         let width=max(1,Int(Double(image.width)*scale)),height=max(1,Int(Double(image.height)*scale))

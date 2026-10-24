@@ -2,6 +2,9 @@ PODS:
   - GoogleDataTransport (10.1.1):
     - nanopb (~> 3.30910.0)
     - PromisesObjC (~> 2.4)
+  - GoogleMLKit/DigitalInkRecognition (8.0.0):
+    - GoogleMLKit/MLKitCore
+    - MLKitDigitalInkRecognition (~> 7.0.0)
   - GoogleMLKit/MLKitCore (8.0.0):
     - MLKitCommon (~> 13.0.0)
   - GoogleMLKit/TextRecognitionJapanese (8.0.0):
@@ -30,6 +33,12 @@ PODS:
     - GoogleUtilities/Logger (~> 8.0)
     - GoogleUtilities/UserDefaults (~> 8.0)
     - GTMSessionFetcher/Core (< 4.0, >= 3.3.2)
+  - MLKitDigitalInkRecognition (7.0.0):
+    - MLKitCommon (~> 13.0)
+    - MLKitMDD (~> 9.0)
+    - SSZipArchive (< 3.0, >= 2.5.5)
+  - MLKitMDD (9.0.0):
+    - MLKitCommon (~> 13.0)
   - MLKitTextRecognitionCommon (5.0.0):
     - MLKitCommon (~> 13.0)
     - MLKitVision (~> 9.0)
@@ -49,8 +58,10 @@ PODS:
   - nanopb/decode (3.30910.0)
   - nanopb/encode (3.30910.0)
   - PromisesObjC (2.4.1)
+  - SSZipArchive (2.6.0)
 
 DEPENDENCIES:
+  - GoogleMLKit/DigitalInkRecognition (= 8.0.0)
   - GoogleMLKit/TextRecognitionJapanese (= 8.0.0)
 
 SPEC REPOS:
@@ -62,11 +73,14 @@ SPEC REPOS:
     - GTMSessionFetcher
     - MLImage
     - MLKitCommon
+    - MLKitDigitalInkRecognition
+    - MLKitMDD
     - MLKitTextRecognitionCommon
     - MLKitTextRecognitionJapanese
     - MLKitVision
     - nanopb
     - PromisesObjC
+    - SSZipArchive
 
 SPEC CHECKSUMS:
   GoogleDataTransport: a24e58982ab3ba2f64d79613e027fe7f57e88539
@@ -76,12 +90,15 @@ SPEC CHECKSUMS:
   GTMSessionFetcher: 5aea5ba6bd522a239e236100971f10cb71b96ab6
   MLImage: 2ab9c968e75f57911c16f4c9d9e8a8e9604a86a1
   MLKitCommon: 26b779f072a182c1603d4c88a101c350cac837b1
+  MLKitDigitalInkRecognition: 00f6bf50ed1a49c9a2e770d57fd87c7fd8aea60a
+  MLKitMDD: 03fd604ba4d4f7556486716641d96977682cade4
   MLKitTextRecognitionCommon: 228502b9dc61ea9cfb6199ebafef3baa842e2043
   MLKitTextRecognitionJapanese: 776fddee29ac10dc304fccea1588accc32f4640c
   MLKitVision: fa8dea9012ac59497c79ddbe9ebf32051047ac4c
   nanopb: fad817b59e0457d11a5dfbde799381cd727c1275
   PromisesObjC: 752c3227f599e3467650e47ea36f433eeb10c273
+  SSZipArchive: 8a6ee5677c8e304bebc109e39cf0da91ccef22ea
 
-PODFILE CHECKSUM: ecd9b53ecb1c0c26d4b485284c558198aec3ed1f
+PODFILE CHECKSUM: 4730f40bfe2e5c9d1349d19172a87c0644816c0d
 
 COCOAPODS: 1.16.2

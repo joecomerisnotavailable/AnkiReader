@@ -4,8 +4,17 @@ import UIKit
 
 enum PageLayout:String,CaseIterable,Identifiable { case vertical="Vertical",horizontal="Horizontal"; var id:String {rawValue} }
 final class SudachiAnalyzer:MorphologicalAnalyzer {
-    init(directory:URL) throws { throw StorageError.database("OCR/tokenization disabled in UI fixture") }
-    func tokenize(_ text:String) throws -> [MorphToken] { throw StorageError.database("Disabled in UI fixture") }
+    init(directory:URL) throws { if !ProcessInfo.processInfo.arguments.contains("--corrections-enabled") { throw StorageError.database("Tokenization disabled in UI fixture") } }
+    // Deterministic UI-only tokenizer, not a Sudachi accuracy test.
+    func tokenize(_ text:String) throws -> [MorphToken] {
+        var result:[MorphToken]=[],offset=0
+        while offset<text.unicodeScalars.count {
+            let remaining=JapaneseText.slice(text,offset,text.unicodeScalars.count)
+            let surface=["元日","悔恨","なだめる"].first{remaining.hasPrefix($0)} ?? String(remaining.first!)
+            result.append(MorphToken(surface:surface,lemma:surface,reading:"",partOfSpeech:"名詞",start:offset,end:offset+surface.unicodeScalars.count,unknown:false));offset += surface.unicodeScalars.count
+        }
+        return result
+    }
 }
 final class GoogleRecognizer {
     func recognize(_ image:UIImage,layout:PageLayout) throws -> Recognition { throw StorageError.database("OCR disabled in UI fixture") }
@@ -22,8 +31,16 @@ private struct SavedPage:Decodable { var recognition:Recognition; var vocabulary
     @StateObject private var model=PhotoPreviewApp.fixture()
     var body:some Scene {
         WindowGroup {
-            ReaderHome().environmentObject(model)
-                .environment(\.dynamicTypeSize,ProcessInfo.processInfo.arguments.contains("--large-text") ? .accessibility2 : .large)
+            if ProcessInfo.processInfo.arguments.contains("--drawing-fixture") {
+                HandwritingPad(replacementText:"泣き",initialSelection:NSRange(location:0,length:2)) { _,_ in }.environmentObject(model)
+            } else if ProcessInfo.processInfo.arguments.contains("--word-fixture"), let page=model.state.captures.first, let item=Recommender.ranked(state:model.state,captureIDs:[page.id],showAll:true).first(where:{$0.occurrence.surface=="なだ"}) {
+                WordDetail(item:item,pages:[page.id]).environmentObject(model)
+            } else if ProcessInfo.processInfo.arguments.contains("--context-fixture"), let term=model.state.occurrences.first(where:{$0.surface=="なだ"}) {
+                SegmentedContextEditor(occurrence:term) {}.environmentObject(model)
+            } else {
+                ReaderHome().environmentObject(model)
+                    .environment(\.dynamicTypeSize,ProcessInfo.processInfo.arguments.contains("--large-text") ? .accessibility2 : .large)
+            }
         }
     }
     @MainActor static func fixture()->ReaderModel {
@@ -54,6 +71,21 @@ private struct SavedPage:Decodable { var recognition:Recognition; var vocabulary
                 let surface=JapaneseText.slice(text,i,i+1),id="gap:\(i)"
                 state.lexemes[id]=Lexeme(id:id,expression:surface,partOfSpeech:"補助記号")
                 state.occurrences.append(Occurrence(captureID:page.id,lexemeID:id,surface:surface,start:i,end:i+1,sentence:surface,fragment:true))
+            }
+            if ProcessInfo.processInfo.arguments.contains("--gesture-fixture") {
+                let phantom=ProcessInfo.processInfo.arguments.contains("--phantom-fixture")
+                page.recognition=Recognition(engine:"synthetic gesture fixture",lines:[TextLine(text:phantom ? "ながにめる。" : "ながめる。",region:Region(x:0.45,y:0.15,width:0.15,height:0.65))],elapsed:0)
+                state.captures=[page];state.occurrences=[];state.lexemes=[:]
+                let tokens=phantom ? [("なが",0,2),("に",2,3),("め",3,4),("る",4,5),("。",5,6)] : [("なが",0,2),("め",2,3),("る",3,4),("。",4,5)]
+                for (surface,start,end) in tokens {
+                    state.lexemes[surface]=Lexeme(id:surface,expression:surface,definitions:["gesture fixture"])
+                    state.occurrences.append(Occurrence(captureID:page.id,lexemeID:surface,surface:surface,start:start,end:end,sentence:page.text,fragment:false))
+                }
+                let original=state.occurrences
+                var corrected=original[0];corrected.surface="なだ";corrected.lexemeID="なだ";corrected.sentence="なだめる。";corrected.corrected=true
+                let proposal=CorrectionPreview(pageID:page.id,revision:0,originalPage:page,originalText:page.text,originalOccurrences:original,start:0,end:2,replacement:"なだ",method:.typing,window:0..<2,occurrences:[corrected],lexemes:[Lexeme(id:"なだ",expression:"なだ",definitions:["corrected fixture"])],manualBoundaries:false)
+                try state.applyCorrection(proposal)
+                model.update{$0=state};model.openPhoto(page.id);return model
             }
             var second=page; second.id="second-fixture-page"; state.captures.append(second)
             if ProcessInfo.processInfo.arguments.contains("--retained") {

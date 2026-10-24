@@ -3,4 +3,5 @@ install! 'cocoapods', :deterministic_uuids => true
 use_frameworks! :linkage => :static
 target 'ReadingCompanion' do
   pod 'GoogleMLKit/TextRecognitionJapanese', '8.0.0'
+  pod 'GoogleMLKit/DigitalInkRecognition', '8.0.0'
 end

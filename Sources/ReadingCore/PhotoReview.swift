@@ -22,6 +22,10 @@ extension LibraryState {
             let sessionID = captures.first { $0.id == item.occurrence.captureID }?.sessionID
             let source = sessions.first { $0.id == sessionID }?.title ?? ""
             var word=RetainedWord(lexeme: item.lexeme, occurrence: item.occurrence, source: source)
+            if let capture=captures.first(where:{$0.id==item.occurrence.captureID}) {
+                word.corrections=CorrectionMapping.history(item.occurrence,page:capture)
+                word.previouslyEdited=item.occurrence.corrected && word.corrections?.isEmpty != false
+            }
             if let guid=retainedGUIDs?[item.id] { word.guid=guid }
             retained[item.id] = word
         }

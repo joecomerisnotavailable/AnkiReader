@@ -76,6 +76,8 @@ struct WordDetail: View {
     let item: Recommendation
     let pages: Set<String>
     @State private var correction=false
+    @State private var correctionDirty=false
+    @State private var confirmCorrectionLeave=false
     @State private var cuts=false
     @State private var dictionary=false
     @State private var expand=false
@@ -90,7 +92,7 @@ struct WordDetail: View {
         NavigationStack {
             List {
                 Section {
-                    Text(occurrence.surface).font(.largeTitle)
+                    WordCorrectionControls(occurrence:occurrence,beforePreview:{saveIfNeeded()},didApply:{dismiss()},dirtyChanged:{correctionDirty=$0})
                     Text(item.lexeme.reading).font(.title3)
                     ForEach(Array(item.lexeme.definitions.enumerated()),id:\.offset) { _,definition in Text(definition) }
                 }
@@ -110,14 +112,14 @@ struct WordDetail: View {
                     Button(checked ? "Deselect for review" : "Select for review") { var focused=item; focused.occurrence=occurrence; model.select(focused,pages:pages,selected:!checked) }
                     Button("Known") { if saveIfNeeded() { model.classify(item,known:true,pageID:occurrence.captureID); dismiss() } }
                     Button("Unknown · exclude this photo") { if saveIfNeeded() { model.classify(item,known:false,pageID:occurrence.captureID); dismiss() } }
-                    Button("Correct this occurrence") { if saveIfNeeded() { correction=true } }
+                    Button("Edit reading or definition") { if saveIfNeeded() { correction=true } }
                     Button("Change word boundaries") { if saveIfNeeded() { cuts=true } }
                     Button("Choose dictionary entry or reading") { if saveIfNeeded() { dictionary=true } }
                 }
                 Section("Other occurrences · tap to select example") {
                     ForEach(model.state.occurrences.filter{$0.lexemeID==item.id && pages.contains($0.captureID)}) { other in
                         Button { model.update{$0.select(item.id,occurrenceID:other.id,pages:pages,selected:true)} } label: {
-                            VStack(alignment:.leading) { Text(other.sentence); if other.selected { Label("Selected example",systemImage:"checkmark").font(.caption) } }
+                            VStack(alignment:.leading) { Text(other.sentence); OccurrenceCorrectionBadge(occurrence:other); if other.selected { Label("Selected example",systemImage:"checkmark").font(.caption) } }
                         }
                     }
                 }
@@ -125,7 +127,7 @@ struct WordDetail: View {
                     Section("Source page") { PageSourceImage(page:page,lineIDs:Set(occurrence.lineIDs)) }
                 }
             }.navigationTitle("Word").navigationBarTitleDisplayMode(.inline)
-                .toolbar { Button("Done") { if dirty { confirmLeave=true } else { dismiss() } } }
+                .toolbar { Button("Done") { if correctionDirty { confirmCorrectionLeave=true } else if dirty { confirmLeave=true } else { dismiss() } } }
                 .onAppear { if context==nil, let page=sourcePage { context=ExampleContext(page:page,occurrence:occurrence); savedContext=context } }
                 .sheet(isPresented:$correction,onDismiss:{dismiss()}) { CorrectionForm(item:item) }
                 .sheet(isPresented:$cuts,onDismiss:{dismiss()}) { if let page=sourcePage { SegmentationEditor(page:page,anchor:occurrence) } }
@@ -135,7 +137,11 @@ struct WordDetail: View {
                     Button("Save and close") { if saveIfNeeded() { dismiss() } }.disabled(!valid)
                     Button("Discard changes",role:.destructive) { dismiss() }
                 }
-        }.interactiveDismissDisabled(dirty)
+                .confirmationDialog("Discard the unsaved text correction?",isPresented:$confirmCorrectionLeave,titleVisibility:.visible) {
+                    Button("Discard correction and close",role:.destructive) { if saveIfNeeded() { dismiss() } }
+                    Button("Keep editing",role:.cancel) {}
+                }
+        }.interactiveDismissDisabled(dirty || correctionDirty)
     }
     private func saveExample() { if let context, model.saveExample(occurrence.id,context:context) { savedContext=context } }
     private func saveIfNeeded()->Bool { if !dirty { return true }; guard valid else { return false }; saveExample(); return !dirty }
@@ -153,11 +159,11 @@ struct CorrectionForm: View {
         NavigationStack {
             Form {
                 Section("This occurrence only") {
-                    TextField("Word as printed", text: $word)
+                    Text(word).font(.title2)
                     TextField("Reading", text: $reading)
                     TextField("Definition", text: $definition, axis: .vertical)
                     TextField("Example from this page", text: $example, axis: .vertical).lineLimit(3...12)
-                    Text("A correction creates a local expression. Other occurrences and retained examples stay unchanged.").font(.caption).foregroundStyle(.secondary)
+                    Text("Metadata edits create a local expression. Use Text as printed in word details to correct recognition.").font(.caption).foregroundStyle(.secondary)
                 }
             }.navigationTitle("Correct")
                 .toolbar { ToolbarItem(placement: .cancellationAction) { Button("Cancel") { dismiss() } }; ToolbarItem(placement: .confirmationAction) { Button("Save") {
@@ -274,7 +280,7 @@ struct RetainedList: View {
     @State private var search = ""
     var body: some View {
         List(model.state.retained.values.filter { search.isEmpty || $0.lexeme.expression.contains(search) || $0.lexeme.reading.contains(search) }.sorted { $0.retainedAt > $1.retainedAt }) { word in
-            VStack(alignment: .leading, spacing: 5) { Text(word.lexeme.expression).font(.headline); Text(word.lexeme.reading); Text(word.lexeme.definitions.first ?? ""); Text(word.example).foregroundStyle(.secondary); Text(word.source).font(.caption) }
+            VStack(alignment: .leading, spacing: 5) { Text(word.lexeme.expression).font(.headline); Text(word.lexeme.reading); Text(word.lexeme.definitions.first ?? ""); Text(word.example).foregroundStyle(.secondary); Text(word.source).font(.caption); CorrectionBadge(changes:word.corrections ?? [],legacy:word.previouslyEdited == true) }
                 .swipeActions(edge:.trailing,allowsFullSwipe:false) { Button("Remove",role:.destructive) { model.removeRetained(word.id) } }
                 .contextMenu { Button("Remove from retained words",role:.destructive) { model.removeRetained(word.id) } }
                 .accessibilityAction(named:"Remove from retained words") { model.removeRetained(word.id) }

@@ -21,7 +21,14 @@ public enum TextGridLayout {
         let vertical=page.layout != "Horizontal"
         let lines=page.recognition?.lines.filter{!$0.isRuby} ?? []
         let original=page.recognition?.text ?? page.text
-        let boundaries=rebaseBoundaries(original:original,edited:page.text)
+        let boundaries:[Int]
+        if let map=page.sourceMap,map.count==page.text.unicodeScalars.count {
+            boundaries=(0...original.unicodeScalars.count).map { offset in
+                if offset==0 { return 0 }
+                if offset==original.unicodeScalars.count { return map.count }
+                return map.firstIndex{$0.start>=offset} ?? map.count
+            }
+        } else { boundaries=rebaseBoundaries(original:original,edited:page.text) }
         let crossSizes=lines.map{vertical ? $0.region.width : $0.region.height}.sorted()
         let crossMedian=crossSizes.isEmpty ? 0.03 : crossSizes[crossSizes.count/2]
         struct Fragment { var range:Range<Int>; var group:Int; var along:Double; var length:Double }

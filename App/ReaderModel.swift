@@ -34,6 +34,14 @@ final class ReadingWorker: @unchecked Sendable {
             }
         }
     }
+    func analyzeCorrection(_ text:String,captureID:String) async throws -> AnalyzedPage {
+        try await withCheckedThrowingContinuation { continuation in
+            queue.async { [self] in
+                do { try prepare();continuation.resume(returning:try ReadingPipeline.analyze(captureID:captureID,recognition:Recognition(engine:"correction",lines:[],elapsed:0),text:text,tokenizer:tokenizer!,dictionary:dictionary!)) }
+                catch { continuation.resume(throwing:error) }
+            }
+        }
+    }
     func resolveExpressions(_ expressions: [String]) async throws -> [Lexeme] {
         try await withCheckedThrowingContinuation { continuation in
             queue.async { [self] in
@@ -101,11 +109,12 @@ final class ReadingWorker: @unchecked Sendable {
     @Published var photoReturnsToFinalReview=false
     @Published var removedRetainedWord:RetainedWord?
     @Published var parseUndo: ParseUndo?
+    @Published var correctionUndo: CorrectionUndo?
     @Published var editingParse = false
     @Published var undoKnown: (String, Knowledge?)?
     let root: URL
     private var store: LibraryStore?
-    private let worker = ReadingWorker()
+    let worker = ReadingWorker()
     private var draining = false
     init() {
         root = FileManager.default.urls(for: .documentDirectory, in: .userDomainMask)[0].appendingPathComponent("ReadingLibrary", isDirectory: true)

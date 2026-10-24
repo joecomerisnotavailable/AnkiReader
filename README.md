@@ -39,6 +39,21 @@ recognition benchmark. No benchmark runs automatically from the reading app.
   editor, preceding/following sentence expansion, and adjustable page-text bounds.
   Expansion preserves manual edits; explicitly applying a source range replaces
   the draft. Ambiguous page-text edits are rejected to preserve explicit work.
+- **OCR correction:** in word details, edit **Text as printed**, request crop-based
+  **Try alternatives**, or choose **Draw kanji**. Handwriting requires an explicit
+  Japanese model download; it then works offline. The drawing sheet keeps strokes
+  separate from scrolling. Candidates edit a draft; **Preview correction** and
+  **Apply** commit it. Choose **Keep existing boundaries** to avoid reparsing nearby
+  terms. Preview checkboxes select vocabulary for collection, not boundaries.
+  **See in context** shows the current color-coded segmentation, including filtered
+  and marked terms. Adjust surrounding text in single-character steps, tap a segment,
+  and edit or delete its text explicitly. Preview proposes boundaries across that
+  context; **Keep existing word boundaries** preserves them instead. Merge gestures
+  cannot skip intervening tokens; rejected drops identify the intervening text.
+  Handwriting shows its replacement range and lets you choose a single character
+  or the whole term before inserting a candidate. Corrections preserve source-image mapping,
+  update text/grid/examples, and show orange before→after annotations. The page menu
+  can undo the latest correction. Existing retained cards remain unchanged.
 - **Review:** a thumbnail backlog grouped by session. Open a photo's **Final review**:
   Selected, Known, and Unknown marks are in the upper pane; eligible unmarked words
   are in the lower pane. Both panes scroll independently. Marks can be changed with

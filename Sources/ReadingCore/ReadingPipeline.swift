@@ -107,6 +107,11 @@ extension LibraryState {
             }
         }
         occurrences = rebased
+        if captures[pageIndex].sourceMap != nil {
+            let mapped=CorrectionMapping.rebasePageEdit(captures[pageIndex],to:text)
+            captures[pageIndex].sourceMap=mapped.0;captures[pageIndex].corrections=mapped.1
+        }
+        captures[pageIndex].textRevision=(captures[pageIndex].textRevision ?? 0)+1
         captures[pageIndex].correctedText = text
         captures[pageIndex].status = .pending
     }

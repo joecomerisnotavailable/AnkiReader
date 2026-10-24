@@ -101,6 +101,7 @@ private struct FinalReviewRow:View {
                 .accessibilityLabel("Review mark: \(label). Actions for \(item.occurrence.surface)")
             }
             Text(item.lexeme.definitions.first ?? "No dictionary match").font(.subheadline).lineLimit(2)
+            OccurrenceCorrectionBadge(occurrence:item.occurrence)
         }
         .alignmentGuide(.listRowSeparatorLeading) { _ in 0 }
         .swipeActions(edge:.leading,allowsFullSwipe:true) { Button { select() } label:{ Label(item.selected ? "Deselect" : "Select",systemImage:"checkmark") }.tint(.green) }

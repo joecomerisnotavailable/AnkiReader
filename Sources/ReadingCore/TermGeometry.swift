@@ -67,8 +67,10 @@ public enum TermGeometry {
         var result: [TermRegion] = []
         for occurrence in occurrences {
             var start=occurrence.start, end=occurrence.end
-            if page.text != original {
-                // A unique unchanged anchor is safe. Repeated or rewritten text has no asserted location.
+            if page.sourceMap != nil {
+                guard let source=CorrectionMapping.source(page,start:start,end:end) else { continue }
+                start=source.start;end=source.end
+            } else if page.text != original {
                 let anchor = JapaneseText.slice(page.text,start,end)
                 guard !anchor.isEmpty, let range=original.range(of:anchor), original[range.upperBound...].range(of:anchor)==nil else { continue }
                 start=original[..<range.lowerBound].unicodeScalars.count; end=start+anchor.unicodeScalars.count
@@ -81,7 +83,7 @@ public enum TermGeometry {
                     let lo=max(localStart,element.start), hi=min(localEnd,element.end)
                     guard hi>lo else { continue }
                     covered.formUnion(lo..<hi)
-                    let partial=lo != element.start || hi != element.end
+                    let partial=lo != element.start || hi != element.end || end-start != occurrence.end-occurrence.start
                     let quad=slice(element.corners, from:fraction(line.text,from:element.start,to:lo,totalEnd:element.end), to:fraction(line.text,from:element.start,to:hi,totalEnd:element.end), vertical:vertical)
                     result.append(TermRegion(id:"\(occurrence.id):\(a+lo):\(a+hi)",occurrenceID:occurrence.id,corners:quad,estimated:partial,vertical:vertical,characterCount:max(1,JapaneseText.slice(line.text,lo,hi).count),anchor:CharacterAnchor(corners:pageCorners(element.corners),text:JapaneseText.slice(line.text,element.start,element.end),vertical:vertical),characterStart:JapaneseText.slice(line.text,element.start,lo).count,characterEnd:JapaneseText.slice(line.text,element.start,hi).count))
                 }

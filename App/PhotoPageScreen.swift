@@ -5,6 +5,7 @@ struct PhotoPageScreen: View {
     let pageID:String
     @StateObject private var coordinator=PhotoPageCoordinator()
     @State private var editPage=false
+    @State private var dragMessage:String?
     @State private var standardRowHeight:CGFloat=110
     private var page:PageCapture? { model.state.captures.first{$0.id==pageID} }
     private var occurrences:[Occurrence] { model.state.occurrences.filter{$0.captureID==pageID}.sorted{$0.start<$1.start} }
@@ -54,7 +55,13 @@ struct PhotoPageScreen: View {
         }
         .onAppear { installCallbacks(); reconcileOrder(reset:true) }
         .onChange(of:recommendations.map(\.id)) { _,_ in reconcileOrder() }
+        .onChange(of:page?.textRevision) { _,_ in
+            if let edit=page?.corrections?.last,let target=occurrences.first(where:{$0.start<=edit.start && $0.end>edit.start}) {
+                coordinator.photoTap(target)
+            }
+        }
         .onChange(of:coordinator.showAll) { _,_ in reconcileOrder() }
+        .alert("Terms could not be joined",isPresented:Binding(get:{dragMessage != nil},set:{if !$0 { dragMessage=nil }})) { Button("OK",role:.cancel) {} } message:{ Text(dragMessage ?? "") }
         .sheet(isPresented:$editPage) { if let page { PageTextEditor(page:page) } }
         .sheet(item:$coordinator.splitOccurrence) { occurrence in if let page { TermSplitPopup(page:page,occurrence:occurrence).presentationDetents([.medium,.large]) } }
         .sheet(item:$coordinator.detailOccurrence) { occurrence in
@@ -70,6 +77,7 @@ struct PhotoPageScreen: View {
             Button("Reset zoom",systemImage:"arrow.up.left.and.arrow.down.right") { coordinator.resetRequest += 1 }
             Button("Edit page text",systemImage:"pencil") { editPage=true }.disabled(page?.status != .ready || model.editingParse)
             if page?.status == .failed { Button("Retry recognition") { model.retry(pageID) } }
+            if model.correctionUndo?.page.id==pageID { Button("Undo text correction",systemImage:"arrow.uturn.backward") { model.undoCorrection() }.disabled(model.editingParse) }
             if model.parseUndo?.pageID==pageID { Button("Undo parse edit",systemImage:"arrow.uturn.backward") { model.undoParse() }.disabled(model.editingParse) }
             Divider()
             Button("Previous pending photo",systemImage:"chevron.backward") { move(-1) }.disabled(adjacent(-1)==nil)
@@ -108,6 +116,13 @@ struct PhotoPageScreen: View {
     private func installCallbacks() {
         coordinator.onTap = { [weak coordinator, weak model] id in if let occurrence=model?.state.occurrences.first(where:{$0.id==id}) { coordinator?.photoTap(occurrence) } }
         coordinator.onSplit = { [weak coordinator, weak model] id in if let model, !model.editingParse { coordinator?.splitOccurrence=model.state.occurrences.first{$0.id==id} } }
+        coordinator.onInvalidDrop = { source,target in
+            guard let a=occurrences.first(where:{$0.id==source}) else { return }
+            if let target,let b=occurrences.first(where:{$0.id==target}),a.id != b.id {
+                let between=occurrences.filter{$0.start>=min(a.end,b.end) && $0.end<=max(a.start,b.start)}.map(\.surface).joined(separator:" · ")
+                dragMessage=between.isEmpty ? "Hold, then drag onto the preceding or following term." : "The saved text has ‘\(between)’ between these terms. Open word details and choose See in context to inspect and edit the saved segmentation. No intervening text is skipped automatically."
+            } else { dragMessage="Hold, then drag onto the preceding or following term. Release over its highlight to join." }
+        }
         coordinator.onMerge = { [weak model] first,second in Task { await model?.merge(first,second) } }
     }
     private func reconcileOrder(reset:Bool=false) {
@@ -146,6 +161,7 @@ struct PhotoWordRow:View {
             Text(item.lexeme.definitions.first ?? "No dictionary match").font(.subheadline).lineLimit(2,reservesSpace:true)
             Text(locationAvailable ? (item.reasons.isEmpty ? (item.secondary ? "Check reading or meaning" : " ") : item.reasons.joined(separator:" · ")) : "Photo location unavailable")
                 .font(.caption).foregroundStyle(.secondary).lineLimit(1)
+            OccurrenceCorrectionBadge(occurrence:occurrence)
         }.frame(maxWidth:.infinity,alignment:.leading)
     }
 }

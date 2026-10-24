@@ -42,6 +42,9 @@ public struct PageCapture: Codable, Identifiable, Sendable {
     public var status: CaptureStatus = .pending
     public var recognition: Recognition?
     public var correctedText: String?
+    public var textRevision: Int?
+    public var sourceMap: [SourceSpan]?
+    public var corrections: [TextCorrection]?
     public var layout: String?
     public var photoRemoved: Bool?
     public var processingVersion: String?
@@ -100,6 +103,8 @@ public struct RetainedWord: Codable, Identifiable, Sendable {
     public var source: String
     public var retainedAt = Date()
     public var modifiedAt = Date()
+    public var corrections: [TextCorrection]?
+    public var previouslyEdited: Bool?
     public init(lexeme: Lexeme, occurrence: Occurrence, source: String) { self.lexeme=lexeme; self.occurrenceID=occurrence.id; self.example=occurrence.sentence; self.surface=occurrence.surface; self.source=source }
 }
 public struct ExportRecord: Codable, Identifiable, Sendable {
