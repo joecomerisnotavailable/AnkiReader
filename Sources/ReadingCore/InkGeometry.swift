@@ -12,14 +12,30 @@ public struct PageRaster: Sendable {
     }
 }
 
+/// Owned by one image view; discard whenever its raster changes. Failed fits are cached too.
+public struct InkGeometryCache: Sendable {
+    fileprivate var fits:[CharacterAnchor:CharacterCellFit]=[:]
+    fileprivate var attempted=Set<CharacterAnchor>()
+    public init() {}
+}
+
 public enum InkGeometry {
     /// Snap only within a fraction of a character pitch. Bad OCR remains estimated;
     /// no reliable local whitespace means no transverse stroke, not a guessed cut.
     public static func refine(_ regions:[TermRegion],raster:PageRaster)->[TermRegion] {
-        var fits:[CharacterAnchor:CharacterCellFit]=[:]
-        for anchor in Set(regions.compactMap(\.anchor)) {
-            if let fit=CharacterCellGeometry.fit(anchor,raster:raster) { fits[anchor]=fit }
+        var cache=InkGeometryCache()
+        return refine(regions,raster:raster,cache:&cache)
+    }
+    public static func refine(_ regions:[TermRegion],raster:PageRaster,cache:inout InkGeometryCache)->[TermRegion] {
+        let anchors=Set(regions.compactMap(\.anchor))
+        // Bound memory to anchors on the current page, including after text corrections.
+        cache.fits=cache.fits.filter{anchors.contains($0.key)}
+        cache.attempted.formIntersection(anchors)
+        for anchor in anchors where !cache.attempted.contains(anchor) {
+            cache.attempted.insert(anchor)
+            if let fit=CharacterCellGeometry.fit(anchor,raster:raster) { cache.fits[anchor]=fit }
         }
+        let fits=cache.fits
         return regions.map { original in
             if let anchor=original.anchor, let fit=fits[anchor], original.characterEnd<fit.boundaries.count {
                 var result=original

@@ -73,68 +73,7 @@ struct InkTouch { var point:CGPoint;var time:Int }
     #endif
     func cancel() { generation += 1;task?.cancel();candidates=[];busy=false }
 }
-struct HandwritingPad:View {
-    @Environment(\.dismiss) private var dismiss
-    @StateObject private var model=HandwritingModel()
-    @State private var strokes:[[InkTouch]]=[]
-    let replacementText:String
-    @State private var replacementRange:NSRange
-    let insert:(String,NSRange)->Void
-    init(insert:@escaping(String)->Void) {
-        replacementText="";_replacementRange=State(initialValue:NSRange(location:0,length:0));self.insert={ value,_ in insert(value) }
-    }
-    init(replacementText:String,initialSelection:NSRange,insert:@escaping(String,NSRange)->Void) {
-        self.replacementText=replacementText;_replacementRange=State(initialValue:initialSelection);self.insert=insert
-    }
-    private var characters:[String] { replacementText.map(String.init) }
-    private var replacing:String { (replacementText as NSString).substring(with:replacementRange) }
-    var body:some View {
-        NavigationStack {
-            VStack(spacing:16) {
-                if !replacementText.isEmpty {
-                    Text("Replacing: 「\(replacing)」").font(.headline)
-                    Text("Choose a character to replace, or replace the whole term. The other characters stay unchanged.").font(.caption)
-                    ScrollView(.horizontal) {
-                        HStack {
-                            ForEach(characters.indices,id:\.self) { i in
-                                let offset=characters.prefix(i).joined().utf16.count
-                                Button(characters[i]) { replacementRange=NSRange(location:offset,length:characters[i].utf16.count) }
-                                    .buttonStyle(.bordered).tint(replacementRange==NSRange(location:offset,length:characters[i].utf16.count) ? .orange : .accentColor)
-                            }
-                            Button("Whole term") { replacementRange=NSRange(location:0,length:replacementText.utf16.count) }.buttonStyle(.bordered)
-                        }
-                    }
-                }
-                Text("Draw the character as you would write it, then choose a candidate.").font(.callout)
-                if model.ready {
-                    InkCanvas(strokes:$strokes,onBegin:{model.cancel()},onChange:{model.changed(strokes)})
-                        .frame(height:280).background(.background).overlay(Rectangle().stroke(.secondary)).accessibilityIdentifier("handwritingCanvas").accessibilityLabel("Kanji drawing area").accessibilityValue("\(strokes.count) strokes")
-                    HStack {
-                        Button("Undo stroke") { if !strokes.isEmpty { strokes.removeLast();model.changed(strokes) } }.disabled(strokes.isEmpty)
-                        Spacer();Button("Clear") { strokes=[];model.cancel() }
-                    }
-                    if model.busy { ProgressView("Recognizing handwriting") }
-                    ScrollView(.horizontal) {
-                        HStack { ForEach(Array(model.candidates.enumerated()),id:\.offset) { _,candidate in
-                            Button(candidate) { insert(candidate,replacementRange);dismiss() }.font(.largeTitle).buttonStyle(.bordered)
-                        } }
-                    }
-                    Button("Remove downloaded model",role:.destructive) { model.remove() }
-                } else {
-                    Text("Enable Japanese handwriting with a one-time model download. Drawing then works offline; strokes are not saved.")
-                    Button(model.downloading ? "Downloading…" : "Download / retry Japanese model") { model.download() }.disabled(model.downloading)
-                    if model.downloading { ProgressView() }
-                }
-                if !model.status.isEmpty { Text(model.status).font(.caption) }
-                Spacer()
-            }.padding().navigationTitle("Draw kanji").navigationBarTitleDisplayMode(.inline)
-                .toolbar { Button("Done") { dismiss() } }
-                .onDisappear { model.cancel();strokes=[] }
-                .interactiveDismissDisabled()
-        }
-    }
-}
-private struct InkCanvas:UIViewRepresentable {
+struct InkCanvas:UIViewRepresentable {
     @Binding var strokes:[[InkTouch]]
     var onBegin:()->Void
     var onChange:()->Void
@@ -144,7 +83,7 @@ private struct InkCanvas:UIViewRepresentable {
         view.changed={ strokes=$0;onChange() };view.setNeedsDisplay()
     }
 }
-private final class InkCanvasView:UIView {
+final class InkCanvasView:UIView {
     var strokes:[[InkTouch]]=[]
     private var lockedScrolls:[(UIScrollView,Bool)]=[]
     var isDrawing=false

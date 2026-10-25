@@ -101,6 +101,7 @@ private struct FinalReviewRow:View {
                 .accessibilityLabel("Review mark: \(label). Actions for \(item.occurrence.surface)")
             }
             Text(item.lexeme.definitions.first ?? "No dictionary match").font(.subheadline).lineLimit(2)
+            if item.occurrence.needsExampleRepair { Label("Example needs repair",systemImage:"exclamationmark.triangle").foregroundStyle(.orange).font(.caption) }
             OccurrenceCorrectionBadge(occurrence:item.occurrence)
         }
         .alignmentGuide(.listRowSeparatorLeading) { _ in 0 }

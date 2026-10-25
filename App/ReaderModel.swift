@@ -47,12 +47,7 @@ final class ReadingWorker: @unchecked Sendable {
             queue.async { [self] in
                 do {
                     try prepare()
-                    let words = try expressions.map { text -> Lexeme in
-                        if let entry = try dictionary!.lookup(text).first { return entry }
-                        let tokens = try tokenizer!.tokenize(text)
-                        if tokens.count == 1 { return try dictionary!.resolve(tokens[0]) }
-                        return Lexeme(id: "local:"+UUID().uuidString, expression: text)
-                    }
+                    let words = try expressions.map { try dictionary!.resolveExpression($0,tokenizer:tokenizer!) }
                     continuation.resume(returning: words)
                 } catch { continuation.resume(throwing: error) }
             }
@@ -110,6 +105,9 @@ final class ReadingWorker: @unchecked Sendable {
     @Published var removedRetainedWord:RetainedWord?
     @Published var parseUndo: ParseUndo?
     @Published var correctionUndo: CorrectionUndo?
+    @Published var pageEditHistory:[String:[PageEditUndo]]=[:]
+    @Published var pendingPageEditorID:String?
+    @Published var lastPageEditStart:[String:Int]=[:]
     @Published var editingParse = false
     @Published var undoKnown: (String, Knowledge?)?
     let root: URL
@@ -323,6 +321,7 @@ extension ReaderModel {
     }
     @discardableResult func finishPhoto(_ id:String)->Bool {
         guard let page=state.captures.first(where:{$0.id==id}), page.status == .ready else { error="Wait for this photo to finish processing."; return false }
+        guard !state.occurrences.contains(where:{$0.captureID==id && $0.selected && $0.needsExampleRepair}) else { error="Repair the marked manual example in word details before finishing.";return false }
         return update { $0.finishPhotos([id]) }
     }
     func classify(_ item:Recommendation,known:Bool,pageID:String) {
@@ -332,10 +331,10 @@ extension ReaderModel {
         update { try $0.saveExample(occurrenceID:id,text:context.draft,start:context.start,end:context.end) }
     }
     func merge(_ firstID:String,_ secondID:String) async {
-        guard let first=state.occurrences.first(where:{$0.id==firstID}), let second=state.occurrences.first(where:{$0.id==secondID}), let page=state.captures.first(where:{$0.id==first.captureID}) else { return }
+        guard let first=state.occurrences.first(where:{$0.id==firstID}),let second=state.occurrences.first(where:{$0.id==secondID}) else { return }
         do {
-            let range=try ParseGesture.mergeRange(first,second,in:state.occurrences.filter{$0.captureID==page.id})
-            await changeParse(pageID:page.id,range:range,surfaces:[JapaneseText.slice(page.text,range.lowerBound,range.upperBound)])
+            let range=try ParseGesture.mergeRange(first,second,in:state.occurrences.filter{$0.captureID==first.captureID})
+            await editPage(first.captureID,command:.join(range))
         } catch { self.error=error.localizedDescription }
     }
     func split(_ id:String,cuts:Set<Int>) async {

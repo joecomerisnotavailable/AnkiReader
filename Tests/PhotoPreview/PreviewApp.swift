@@ -31,16 +31,8 @@ private struct SavedPage:Decodable { var recognition:Recognition; var vocabulary
     @StateObject private var model=PhotoPreviewApp.fixture()
     var body:some Scene {
         WindowGroup {
-            if ProcessInfo.processInfo.arguments.contains("--drawing-fixture") {
-                HandwritingPad(replacementText:"泣き",initialSelection:NSRange(location:0,length:2)) { _,_ in }.environmentObject(model)
-            } else if ProcessInfo.processInfo.arguments.contains("--word-fixture"), let page=model.state.captures.first, let item=Recommender.ranked(state:model.state,captureIDs:[page.id],showAll:true).first(where:{$0.occurrence.surface=="なだ"}) {
-                WordDetail(item:item,pages:[page.id]).environmentObject(model)
-            } else if ProcessInfo.processInfo.arguments.contains("--context-fixture"), let term=model.state.occurrences.first(where:{$0.surface=="なだ"}) {
-                SegmentedContextEditor(occurrence:term) {}.environmentObject(model)
-            } else {
                 ReaderHome().environmentObject(model)
                     .environment(\.dynamicTypeSize,ProcessInfo.processInfo.arguments.contains("--large-text") ? .accessibility2 : .large)
-            }
         }
     }
     @MainActor static func fixture()->ReaderModel {
@@ -85,6 +77,7 @@ private struct SavedPage:Decodable { var recognition:Recognition; var vocabulary
                 var corrected=original[0];corrected.surface="なだ";corrected.lexemeID="なだ";corrected.sentence="なだめる。";corrected.corrected=true
                 let proposal=CorrectionPreview(pageID:page.id,revision:0,originalPage:page,originalText:page.text,originalOccurrences:original,start:0,end:2,replacement:"なだ",method:.typing,window:0..<2,occurrences:[corrected],lexemes:[Lexeme(id:"なだ",expression:"なだ",definitions:["corrected fixture"])],manualBoundaries:false)
                 try state.applyCorrection(proposal)
+                state.basicWords.insert("に")
                 model.update{$0=state};model.openPhoto(page.id);return model
             }
             var second=page; second.id="second-fixture-page"; state.captures.append(second)

@@ -129,6 +129,9 @@ extension LibraryState {
             let overlapping = old.filter { $0.start < next && $0.end > offset }
             var occurrence = Occurrence(captureID: captureID, lexemeID: word.id, surface: surface, start: offset, end: next, lineIDs: Array(Set(overlapping.flatMap(\.lineIDs))), sentence: example.0, fragment: example.1)
             occurrence.corrected = true; occurrence.selected = overlapping.contains( where: \.selected)
+            let saved=overlapping.flatMap(\.preservedExamples)
+            occurrence.exampleAlternatives=Array(Set(saved))
+            if let manual=overlapping.first(where:{$0.manualExample == true}) { occurrence.sentence=manual.sentence;occurrence.manualExample=true }
             occurrences.append(occurrence); lexemes[word.id] = word; offset = next
         }
     }

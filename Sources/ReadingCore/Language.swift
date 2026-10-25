@@ -43,6 +43,31 @@ public final class DictionaryIndex {
         let matched=items.filter{JapaneseText.kana($0.reading)==JapaneseText.kana(reading)}
         return matched.isEmpty && !strictReading ? items : matched
     }
+    /// Resolve a user-defined segment without changing its visible boundaries.
+    /// Sudachi separates inflectional endings (貼っ + て); these still name one lexeme.
+    public func resolveExpression(_ text:String,tokenizer:MorphologicalAnalyzer) throws -> Lexeme {
+        if let exact=try lookup(text).first { return exact }
+        let tokens=try tokenizer.tokenize(text)
+        if tokens.count==1 { return try resolve(tokens[0]) }
+        if let head=tokens.first, !head.unknown,
+           ["動詞","形容詞"].contains(head.partOfSpeech.components(separatedBy:",").first ?? ""),
+           tokens.map(\.surface).joined()==text {
+            var offset=0
+            let contiguous=tokens.allSatisfy { token in
+                defer { offset=token.end }
+                return token.start==offset && token.end==offset+token.surface.unicodeScalars.count && !token.unknown
+            }
+            let endings=tokens.dropFirst().allSatisfy { token in
+                let pos=token.partOfSpeech.components(separatedBy:",")
+                return pos.first=="助動詞" || (pos.starts(with:["助詞","接続助詞"]) && ["て","で"].contains(token.surface))
+            }
+            if contiguous && endings {
+                let word=try resolve(head)
+                if word.dictionaryID != nil { return word }
+            }
+        }
+        return Lexeme(id:"local:"+UUID().uuidString,expression:text)
+    }
     public func resolve(_ token:MorphToken) throws -> Lexeme {
         let candidates=try lookup(token.lemma,reading:token.reading)
         if var first=candidates.first {
@@ -62,8 +87,33 @@ public struct Recommendation: Identifiable {
 }
 public enum Recommender {
     public static func ranked(state:LibraryState,captureIDs:Set<String>,showAll:Bool = false) -> [Recommendation] {
+        // Build library-wide indexes once, rather than scanning the library for every term
+        // and every comparison while choosing an example.
+        let pages=Dictionary(uniqueKeysWithValues:state.captures.map{($0.id,$0)})
+        let sources=Dictionary(uniqueKeysWithValues:state.sessions.map{($0.id,$0.source)})
+        let sourceIDs=Set(state.captures.filter{captureIDs.contains($0.id)}.compactMap{sources[$0.sessionID]})
+        let cutoff=Date().addingTimeInterval(-30*86400)
+        let relevantPages=Dictionary(uniqueKeysWithValues:state.captures.filter {
+            $0.created>cutoff || sources[$0.sessionID].map{sourceIDs.contains($0)} == true
+        }.map{($0.id,$0.fingerprint)})
+        var seenPages:[String:Set<String>]=[:]
+        var unknownBySentence:[String:[String:Set<String>]]=[:]
+        for occurrence in state.occurrences {
+            if let fingerprint=relevantPages[occurrence.captureID] {
+                seenPages[occurrence.lexemeID,default:[]].insert(fingerprint)
+            }
+            guard captureIDs.contains(occurrence.captureID) else { continue }
+            let unknown:Bool
+            if let l=state.lexemes[occurrence.lexemeID] {
+                unknown = !(state.knowledge[l.id]?.isKnown ?? false) && !state.basicWords.contains(l.expression) && !["助詞","助動詞","補助記号","空白"].contains{l.partOfSpeech.hasPrefix($0)}
+            } else { unknown=true }
+            if unknown { unknownBySentence[occurrence.captureID,default:[:]][occurrence.sentence,default:[]].insert(occurrence.lexemeID) }
+        }
+        func unknownCount(_ occurrence:Occurrence)->Int {
+            unknownBySentence[occurrence.captureID]?[occurrence.sentence]?.count ?? 0
+        }
         let groups=Dictionary(grouping:state.occurrences.filter { o in
-            captureIDs.contains(o.captureID) && (showAll || o.selected || !(state.captures.first { $0.id == o.captureID }?.excludedLexemeIDs?.contains(o.lexemeID) ?? false))
+            captureIDs.contains(o.captureID) && (showAll || o.selected || !(pages[o.captureID]?.excludedLexemeIDs?.contains(o.lexemeID) ?? false))
         },by:\.lexemeID)
         return groups.compactMap { id,occurrences -> Recommendation? in
             guard let lexeme=state.lexemes[id] else { return nil }
@@ -75,16 +125,12 @@ public enum Recommender {
             let best=occurrences.sorted { a,b in
                 if a.selected != b.selected { return a.selected }
                 if a.fragment != b.fragment { return !a.fragment }
-                let au=unknownCount(a,state),bu=unknownCount(b,state)
+                let au=unknownCount(a),bu=unknownCount(b)
                 if au != bu { return au<bu }
                 return a.sentence.count<b.sentence.count
             }.first!
-            let sourceIDs=Set(state.captures.filter{captureIDs.contains($0.id)}.compactMap{c in state.sessions.first{$0.id==c.sessionID}?.source})
-            let relevantPages=Dictionary(uniqueKeysWithValues:state.captures.filter { c in
-                c.created.timeIntervalSinceNow > -30*86400 || state.sessions.contains{$0.id==c.sessionID && sourceIDs.contains($0.source)}
-            }.map{($0.id,$0.fingerprint)})
-            let distinct=Set(state.occurrences.filter{$0.lexemeID==id}.compactMap{relevantPages[$0.captureID]}).count
-            let unknown=unknownCount(best,state)
+            let distinct=seenPages[id]?.count ?? 0
+            let unknown=unknownCount(best)
             let accessibility=1.0/Double(max(1,unknown)) * (best.fragment ? 0.7 : 1)
             let score=0.45*lexeme.commonness+0.35*min(1,Double(max(0,distinct-1))/4)+0.20*accessibility
             var reasons:[String]=[]
@@ -99,11 +145,5 @@ public enum Recommender {
             if $0.score != $1.score { return $0.score>$1.score }
             return $0.id<$1.id
         }
-    }
-    private static func unknownCount(_ occurrence:Occurrence,_ state:LibraryState) -> Int {
-        Set(state.occurrences.filter{$0.captureID==occurrence.captureID && $0.sentence==occurrence.sentence}.filter { o in
-            guard let l=state.lexemes[o.lexemeID] else { return true }
-            return !(state.knowledge[l.id]?.isKnown ?? false) && !state.basicWords.contains(l.expression) && !["助詞","助動詞","補助記号","空白"].contains{l.partOfSpeech.hasPrefix($0)}
-        }.map(\.lexemeID)).count
     }
 }

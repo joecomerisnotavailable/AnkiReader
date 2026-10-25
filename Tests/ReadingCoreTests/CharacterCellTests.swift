@@ -26,6 +26,15 @@ final class CharacterCellTests:XCTestCase {
             let left=TermRegion(id:"a",occurrenceID:"a",corners:anchor.corners,estimated:true,vertical:vertical,anchor:anchor,characterStart:0,characterEnd:2)
             let right=TermRegion(id:"b",occurrenceID:"b",corners:anchor.corners,estimated:true,vertical:vertical,anchor:anchor,characterStart:2,characterEnd:4)
             let refined=InkGeometry.refine([left,right],raster:PageRaster(width:240,height:240,pixels:pixels))
+            var cache=InkGeometryCache()
+            let raster=PageRaster(width:240,height:240,pixels:pixels)
+            _=InkGeometry.refine([left],raster:raster,cache:&cache)
+            // A segmentation edit reuses the same OCR anchor but introduces new regions.
+            let warm=InkGeometry.refine([left,right],raster:raster,cache:&cache)
+            XCTAssertEqual(warm,refined)
+            let changed=CharacterAnchor(corners:anchor.corners,text:"私。日",vertical:vertical)
+            var edited=right;edited.anchor=changed;edited.characterEnd=3
+            XCTAssertEqual(InkGeometry.refine([edited],raster:raster,cache:&cache),InkGeometry.refine([edited],raster:raster))
             XCTAssertEqual(vertical ? refined[0].corners[3] : refined[0].corners[1],refined[1].corners[0])
         }
     }

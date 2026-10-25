@@ -16,6 +16,7 @@ extension LibraryState {
         }
     }
     public mutating func finishPhotos(_ ids: Set<String>) {
+        guard !occurrences.contains(where:{ids.contains($0.captureID) && $0.selected && $0.needsExampleRepair}) else { return }
         migratePhotoReviews()
         for item in Recommender.ranked(state: self, captureIDs: ids, showAll: true) where item.selected {
             guard retained[item.id] == nil else { continue }

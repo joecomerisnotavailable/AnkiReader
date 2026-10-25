@@ -15,45 +15,39 @@ recognition benchmark. No benchmark runs automatically from the reading app.
   screens that do not trigger it. Capture saves first and opens the photo immediately;
   the top-left arrow returns to the camera. Choose vertical/horizontal text layout
   or import a photo. Source is optional.
-- **Page:** pinch, pan, or double-tap the photo. The stationary vocabulary pane is
-  about 1.25 word rows tall and adapts to Dynamic Type. Tap a photo term to focus its
-  row; tap a row to reveal and pulse its occurrence. Filtered terms remain parsed
-  and interactive in gray on the photo, while **Show all words** restores their
-  rows. Colored terms use three recommendation bands. Dashed outlines indicate
-  estimated geometry. Vertical text has horizontal separators; horizontal text
-  has vertical separators. No OCR rerun is needed for existing photos.
-  The photo's local ink gaps refine the estimated edges asynchronously. If there
-  is no reliable gap near an edge, its hard separator is omitted. This improves
-  delimiting without changing recognized text; poor OCR boxes can still limit it.
+- **Page:** pinch, pan, or double-tap the photo. Below it, a large, single-line
+  context strip shows every parsed occurrence in page order, including filtered
+  terms. The vocabulary list stays at the bottom. Tap any of the three panes to
+  focus the same occurrence in the others. A focused filtered term temporarily
+  appears in the vocabulary list without changing knowledge or filters.
+  Dashed photo outlines indicate estimated geometry. Vertical text has horizontal
+  separators; horizontal text has vertical separators. Local ink gaps refine the
+  edges asynchronously; no OCR rerun is required for existing captures.
 - **Words:** long-press a row for details. Swipe right to select/deselect; swipe left
   to reveal explicit **Known** and **Unknown** buttons. Known clears pending
   selections globally; Unknown excludes the word only from this photo's proposals.
   Show all words permits explicit reselection without changing knowledge. The
   top-right menu includes sorting, Words-only, zoom reset, page-text editing,
   previous/next pending photo, backlog, and Final review. Selection does not reorder rows.
-- **Repair:** hold a photo term, then drag onto its adjacent parsed neighbor to merge;
-  release without dragging to place one or two split cursors in an enlarged strip.
-  A highlighted drop target and haptics confirm adjacency; invalid drops cancel.
-  Use **Undo parse edit** in the menu to undo the latest merge/split. Word details
-  retain dictionary/custom-expression correction and add an independent example
-  editor, preceding/following sentence expansion, and adjustable page-text bounds.
-  Expansion preserves manual edits; explicitly applying a source range replaces
-  the draft. Ambiguous page-text edits are rejected to preserve explicit work.
-- **OCR correction:** in word details, edit **Text as printed**, request crop-based
-  **Try alternatives**, or choose **Draw kanji**. Handwriting requires an explicit
-  Japanese model download; it then works offline. The drawing sheet keeps strokes
-  separate from scrolling. Candidates edit a draft; **Preview correction** and
-  **Apply** commit it. Choose **Keep existing boundaries** to avoid reparsing nearby
-  terms. Preview checkboxes select vocabulary for collection, not boundaries.
-  **See in context** shows the current color-coded segmentation, including filtered
-  and marked terms. Adjust surrounding text in single-character steps, tap a segment,
-  and edit or delete its text explicitly. Preview proposes boundaries across that
-  context; **Keep existing word boundaries** preserves them instead. Merge gestures
-  cannot skip intervening tokens; rejected drops identify the intervening text.
-  Handwriting shows its replacement range and lets you choose a single character
-  or the whole term before inserting a candidate. Corrections preserve source-image mapping,
-  update text/grid/examples, and show orange before→after annotations. The page menu
-  can undo the latest correction. Existing retained cards remain unchanged.
+- **Repair:** hold a context term and drag onto its adjacent neighbor to merge;
+  hold and drag upward into the labeled Discard target to delete exactly that term.
+  Hold and release for **Edit**, **Join**, or **Shatter**. Shatter separates visible
+  characters. Join places two character-level handles; Confirm joins the selected
+  range and preserves outside fragments. The page menu provides **Undo last edit**
+  for up to 20 edits per photo during the app session. Undo refuses to overwrite
+  subsequent review decisions.
+- **Edit:** the compact bottom editor keeps the photo interactive. **Keep** saves
+  one replacement term, preserving neighboring boundaries; an empty replacement
+  deletes it. **Cancel**, outside tap, or downward dismissal discards the draft.
+  The drawing icon replaces the keyboard with a handwriting pad; a chosen candidate
+  inserts at the saved cursor or replaces the selected characters. Download the
+  Japanese handwriting model once for offline recognition. Photo alternatives run
+  only when requested and edit only the draft. Corrections retain their photo source
+  mapping and orange before→after history. Existing retained cards stay unchanged.
+  Word details retain reading/definition editing and example editing/expansion;
+  **Edit on page** opens this same compact editor. Manual examples survive parse
+  changes as saved alternatives; invalid selected examples must be repaired before
+  final retention.
 - **Review:** a thumbnail backlog grouped by session. Open a photo's **Final review**:
   Selected, Known, and Unknown marks are in the upper pane; eligible unmarked words
   are in the lower pane. Both panes scroll independently. Marks can be changed with
@@ -145,6 +139,22 @@ or CocoaPods configuration. Avoid rerunning `generate_project.rb` on this config
 checkout; it creates a new project. Native dependencies, dictionaries, Pods, test
 fixtures, and private page photos are ignored local build inputs. A fully automated
 clean-machine bootstrap is still needed.
+
+## Editing performance checks
+
+Join/Shatter reuse character-cell fits for unchanged OCR anchors on the current
+photo. The cache is discarded on image changes; changed anchors are refitted.
+Context-strip glyph measurements are reused until text, offsets, font size, or
+pane size changes. Recommendation scoring indexes recurrence and sentence
+knowledge once per pass, preserving the original scores and example selection.
+Transactional saving and edit/undo semantics are unchanged.
+
+`RecommendationPerformanceTests` compares indexed scoring against the original
+implementation. Optionally set `EDIT_PERFORMANCE_LIBRARY` to a saved LibraryState
+JSON file when running `swift test` to compare and time both on that library.
+This reads saved data only and performs no OCR. On the local 3,106-occurrence
+fixture, Debug Mac scoring took approximately 804 → 9 ms (filtered) and
+1,782 → 12 ms (Show all). These are scoring times, not end-to-end iPhone timings.
 
 ## Remaining acceptance and release work
 

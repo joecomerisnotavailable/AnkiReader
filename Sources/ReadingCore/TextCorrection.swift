@@ -85,7 +85,7 @@ public enum CorrectionMapping {
     }
 }
 extension LibraryState {
-    public mutating func applyCorrection(_ preview:CorrectionPreview) throws {
+    public mutating func applyCorrection(_ preview:CorrectionPreview,requireValidExample:Bool = true) throws {
         guard let index=captures.firstIndex(where:{$0.id==preview.pageID}) else { throw StorageError.invalidArchive("Photo no longer exists.") }
         let page=captures[index], old=occurrences.filter{$0.captureID==page.id}
         let encoder=JSONEncoder();encoder.outputFormatting = .sortedKeys
@@ -127,7 +127,7 @@ extension LibraryState {
             if let a=updated[i].exampleStart,let b=updated[i].exampleEnd { let r=shifted(SourceSpan(a,b));updated[i].exampleStart=r.start;updated[i].exampleEnd=r.end }
         }
         for item in preview.occurrences {
-            guard item.sentence.contains(item.surface) else { throw StorageError.invalidArchive("Keep each corrected target in its example before applying.") }
+            guard !requireValidExample || item.sentence.contains(item.surface) else { throw StorageError.invalidArchive("Keep each corrected target in its example before applying.") }
         }
         updated += preview.occurrences
         occurrences.removeAll{$0.captureID==page.id};occurrences += updated

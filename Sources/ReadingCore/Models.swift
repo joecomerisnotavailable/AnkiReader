@@ -81,6 +81,7 @@ public struct Occurrence: Codable, Identifiable, Sendable {
     public var exampleStart: Int?
     public var exampleEnd: Int?
     public var manualExample: Bool?
+    public var exampleAlternatives: [SavedExample]?
     public var selected = false
     public var corrected = false
     public init(captureID: String, lexemeID: String, surface: String, start: Int, end: Int, lineIDs: [String] = [], sentence: String, fragment: Bool, confidence: Double? = nil) {

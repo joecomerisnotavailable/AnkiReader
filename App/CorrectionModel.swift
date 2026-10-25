@@ -38,6 +38,7 @@ extension ReadingWorker {
             let overlapping=old.filter{range($0).overlaps(items[i].start..<items[i].end)}
             items[i].selected=overlapping.contains(where:\.selected)
             items[i].lineIDs=Array(Set(overlapping.flatMap(\.lineIDs)))
+            items[i].exampleAlternatives=Array(Set(overlapping.flatMap(\.preservedExamples)))
             if let manual=overlapping.first(where:{$0.manualExample==true}) {
                 items[i].sentence=manual.sentence;items[i].manualExample=true
             }

@@ -4,48 +4,20 @@ struct PhotoPageScreen: View {
     @EnvironmentObject var model:ReaderModel
     let pageID:String
     @StateObject private var coordinator=PhotoPageCoordinator()
-    @State private var editPage=false
     @State private var dragMessage:String?
     @State private var standardRowHeight:CGFloat=110
     private var page:PageCapture? { model.state.captures.first{$0.id==pageID} }
     private var occurrences:[Occurrence] { model.state.occurrences.filter{$0.captureID==pageID}.sorted{$0.start<$1.start} }
     private var recommendations:[Recommendation] { Recommender.ranked(state:model.state,captureIDs:[pageID],showAll:coordinator.showAll) }
     private var ordered:[Recommendation] {
-        let values=recommendations
+        var values=recommendations
+        if let active=occurrences.first(where:{$0.id==coordinator.activeOccurrenceID}),!values.contains(where:{$0.id==active.lexemeID}),var item=Recommender.ranked(state:model.state,captureIDs:[pageID],showAll:true).first(where:{$0.id==active.lexemeID}) { item.occurrence=active;values.insert(item,at:0) }
         if coordinator.pageOrder { return values.sorted{$0.occurrence.start<$1.occurrence.start} }
         let order=Dictionary(uniqueKeysWithValues:coordinator.stableOrder.enumerated().map{($0.element,$0.offset)})
         return values.sorted { (order[$0.id] ?? Int.max) < (order[$1.id] ?? Int.max) }
     }
     var body:some View {
-        VStack(spacing:0) {
-            if let page {
-                let items=ordered
-                let allRegions=TermGeometry.regions(page:page,occurrences:occurrences)
-                let grid=coordinator.textGrid ? TextGridLayout.make(page:page,occurrences:occurrences) : nil
-                // Proposal filters affect the list, never the editable page parse.
-                let visibleIDs=Set(occurrences.map(\.id))
-                let scoreByLexeme=Dictionary(uniqueKeysWithValues:items.map{($0.id,$0.score)})
-                let scores=Dictionary(uniqueKeysWithValues:occurrences.map{($0.id,scoreByLexeme[$0.lexemeID] ?? -1)})
-                GeometryReader { geo in
-                    VStack(spacing:0) {
-                        VStack(spacing:0) {
-                          ZStack {
-                            if page.photoRemoved == true { ContentUnavailableView("Photo removed",systemImage:"photo",description:Text("The recognized text and vocabulary are still available.")) }
-                            if page.photoRemoved != true || coordinator.textGrid { ZoomablePage(url:model.imageURL(page),grid:grid,regions:allRegions,occurrences:occurrences,visibleIDs:visibleIDs,scores:scores,page:coordinator) }
-                            if page.status != .ready {
-                                VStack { Spacer(); Text(page.status == .failed ? "Recognition failed · Retry in menu" : "Photo saved · finding words…").font(.callout).padding(12).background(.regularMaterial,in:Capsule()).padding() }
-                            }
-                          }
-                          Button { coordinator.textGrid.toggle() } label:{ Label(coordinator.textGrid ? "Show photo" : "Show text grid",systemImage:coordinator.textGrid ? "photo" : "character.textbox").font(.callout).frame(maxWidth:.infinity).padding(.vertical,8) }.background(.bar)
-                        }.frame(height:coordinator.wordsOnly ? 0 : max(0,geo.size.height-paneHeight(geo.size.height))).clipped().accessibilityHidden(coordinator.wordsOnly)
-                        if !coordinator.wordsOnly { Divider() }
-                        wordList(items:items,regions:grid?.regions ?? allRegions)
-                            .frame(height:coordinator.wordsOnly ? geo.size.height : paneHeight(geo.size.height))
-                    }
-                }
-                if model.editingParse { ProgressView("Updating terms…").font(.caption).padding(4) }
-            } else { ContentUnavailableView("Photo unavailable",systemImage:"photo") }
-        }
+        observedContent
         .background(.background)
         .navigationTitle(page.map { capture in model.state.sessions.first{$0.id==capture.sessionID}?.title ?? "Page" } ?? "Page")
         .navigationBarTitleDisplayMode(.inline).navigationBarBackButtonHidden(true)
@@ -53,32 +25,87 @@ struct PhotoPageScreen: View {
             ToolbarItem(placement:.topBarLeading) { Button { model.leavePhoto(pageID) } label:{ Image(systemName:"chevron.left") }.accessibilityLabel(model.photoReturnsToFinalReview ? "Back to final review" : "Back to camera") }
             ToolbarItem(placement:.topBarTrailing) { pageMenu }
         }
-        .onAppear { installCallbacks(); reconcileOrder(reset:true) }
-        .onChange(of:recommendations.map(\.id)) { _,_ in reconcileOrder() }
-        .onChange(of:page?.textRevision) { _,_ in
-            if let edit=page?.corrections?.last,let target=occurrences.first(where:{$0.start<=edit.start && $0.end>edit.start}) {
-                coordinator.photoTap(target)
-            }
-        }
-        .onChange(of:coordinator.showAll) { _,_ in reconcileOrder() }
         .alert("Terms could not be joined",isPresented:Binding(get:{dragMessage != nil},set:{if !$0 { dragMessage=nil }})) { Button("OK",role:.cancel) {} } message:{ Text(dragMessage ?? "") }
-        .sheet(isPresented:$editPage) { if let page { PageTextEditor(page:page) } }
-        .sheet(item:$coordinator.splitOccurrence) { occurrence in if let page { TermSplitPopup(page:page,occurrence:occurrence).presentationDetents([.medium,.large]) } }
+        .overlay(alignment:.bottom) { editorOverlay }
+        .onReceive(NotificationCenter.default.publisher(for:UIResponder.keyboardDidShowNotification)) { _ in if coordinator.editorOccurrence != nil { coordinator.editFocusRequest += 1 } }
+        .onDisappear { coordinator.stopEditing();coordinator.joinRange=nil;coordinator.dragSession.cancel() }
         .sheet(item:$coordinator.detailOccurrence) { occurrence in
             if let item=detailRecommendation(occurrence) { WordDetail(item:item,pages:[pageID]) }
         }
     }
-    private func paneHeight(_ available:CGFloat)->CGFloat { min(available*0.65,standardRowHeight*1.25) }
+    @ViewBuilder private var editorOverlay:some View {
+            if let occurrence=coordinator.editorOccurrence {
+                CompactWordEditor(occurrence:occurrence,close:{coordinator.stopEditing()},saved:{coordinator.stopEditing();coordinator.undoNotice=true}).id(occurrence.id)
+            } else if coordinator.undoNotice {
+                HStack { Text("Edit saved");Button("Undo") { model.undoPageEdit(pageID);coordinator.undoNotice=false };Button {coordinator.undoNotice=false} label:{Image(systemName:"xmark")} }
+                    .padding(10).background(.regularMaterial,in:Capsule()).padding(.bottom,8)
+            }
+    }
+    private var observedContent:some View {
+        pageContent
+        .onAppear { model.preparePageEditing(pageID);installCallbacks();reconcileOrder(reset:true);openRequestedEditor() }
+        .onChange(of:page?.status) { _,status in if status == .ready { model.preparePageEditing(pageID) } }
+        .onChange(of:model.pendingPageEditorID) { _,_ in openRequestedEditor() }
+        .onChange(of:recommendations.map(\.id)) { _,_ in reconcileOrder() }
+        .onChange(of:page?.textRevision) { _,_ in
+            let offset=model.lastPageEditStart[pageID] ?? page?.corrections?.last?.start ?? 0
+            if let target=occurrences.first(where:{$0.start<=offset && $0.end>offset}) ?? occurrences.last {
+                coordinator.photoTap(target)
+                coordinator.undoNotice = !(model.pageEditHistory[pageID] ?? []).isEmpty
+            }
+        }
+        .onChange(of:coordinator.showAll) { _,_ in reconcileOrder() }
+    }
+    private var pageContent:some View {
+        VStack(spacing:0) {
+            if let page {
+                let items=ordered
+                let allRegions=TermGeometry.regions(page:page,occurrences:occurrences)
+                // Proposal filters affect the list, never the editable page parse.
+                let scoreByLexeme=Dictionary(uniqueKeysWithValues:recommendations.map{($0.id,$0.score)})
+                let scores=Dictionary(uniqueKeysWithValues:occurrences.map{($0.id,scoreByLexeme[$0.lexemeID] ?? -1)})
+                pageLayout(page:page,items:items,regions:allRegions,scores:scores)
+                if model.editingParse { ProgressView("Updating terms…").font(.caption).padding(4) }
+            } else { ContentUnavailableView("Photo unavailable",systemImage:"photo") }
+        }
+    }
+    private func pageLayout(page:PageCapture,items:[Recommendation],regions:[TermRegion],scores:[String:Double])->some View {
+                GeometryReader { geo in
+                    let lower=min(geo.size.height*0.60,standardRowHeight*2.25)
+                    let contextHeight=lower/2.25
+                    VStack(spacing:0) {
+                        ZStack {
+                            if page.photoRemoved == true { ContentUnavailableView("Photo removed",systemImage:"photo",description:Text("The recognized text and vocabulary are still available.")) }
+                            else { ZoomablePage(url:model.imageURL(page),regions:regions,occurrences:occurrences,visibleIDs:Set(occurrences.map(\.id)),scores:scores,page:coordinator) }
+                            if page.status != .ready { VStack { Spacer();Text(page.status == .failed ? "Recognition failed · Retry in menu" : "Photo saved · finding words…").font(.callout).padding(12).background(.regularMaterial,in:Capsule()).padding() } }
+                        }.frame(height:coordinator.wordsOnly ? 0 : max(0,geo.size.height-lower)).clipped().accessibilityHidden(coordinator.wordsOnly)
+                        if !coordinator.wordsOnly {
+                            Divider()
+                            VStack(spacing:0) {
+                                if let range=coordinator.joinRange {
+                                    HStack {
+                                        Button("Cancel join") { coordinator.joinRange=nil;coordinator.interaction = .browsing }
+                                        Text(JapaneseText.slice(page.text,range.lowerBound,range.upperBound)).lineLimit(1).font(.caption)
+                                        Spacer()
+                                        Button("Confirm join") { apply(.join(range)) }.disabled(model.editingParse)
+                                    }.padding(.horizontal,8)
+                                }
+                                ContextStrip(text:page.text,occurrences:occurrences,scores:scores,page:coordinator,annotations:contextAnnotations(page),disabled:model.editingParse,action:contextAction)
+                            }.frame(height:contextHeight).zIndex(2)
+                            Divider()
+                        }
+                        wordList(items:items,regions:regions).frame(height:coordinator.wordsOnly ? geo.size.height : lower-contextHeight)
+                    }
+                }
+    }
     private var pageMenu:some View {
         Menu {
             Picker("Sort",selection:$coordinator.pageOrder) { Text("Recommended").tag(false); Text("Page order").tag(true) }
             Toggle("Show all words",isOn:$coordinator.showAll)
             Toggle("Words only",isOn:$coordinator.wordsOnly)
             Button("Reset zoom",systemImage:"arrow.up.left.and.arrow.down.right") { coordinator.resetRequest += 1 }
-            Button("Edit page text",systemImage:"pencil") { editPage=true }.disabled(page?.status != .ready || model.editingParse)
             if page?.status == .failed { Button("Retry recognition") { model.retry(pageID) } }
-            if model.correctionUndo?.page.id==pageID { Button("Undo text correction",systemImage:"arrow.uturn.backward") { model.undoCorrection() }.disabled(model.editingParse) }
-            if model.parseUndo?.pageID==pageID { Button("Undo parse edit",systemImage:"arrow.uturn.backward") { model.undoParse() }.disabled(model.editingParse) }
+            if !(model.pageEditHistory[pageID] ?? []).isEmpty { Button("Undo last edit",systemImage:"arrow.uturn.backward") { model.undoPageEdit(pageID) }.disabled(model.editingParse) }
             Divider()
             Button("Previous pending photo",systemImage:"chevron.backward") { move(-1) }.disabled(adjacent(-1)==nil)
             Button("Next pending photo",systemImage:"chevron.forward") { move(1) }.disabled(adjacent(1)==nil)
@@ -115,15 +142,43 @@ struct PhotoPageScreen: View {
     }
     private func installCallbacks() {
         coordinator.onTap = { [weak coordinator, weak model] id in if let occurrence=model?.state.occurrences.first(where:{$0.id==id}) { coordinator?.photoTap(occurrence) } }
-        coordinator.onSplit = { [weak coordinator, weak model] id in if let model, !model.editingParse { coordinator?.splitOccurrence=model.state.occurrences.first{$0.id==id} } }
+        coordinator.onSplit = { [weak coordinator, weak model] id in if let model, !model.editingParse { if let item=model.state.occurrences.first(where:{$0.id==id}) { coordinator?.startEditing(item) } } }
         coordinator.onInvalidDrop = { source,target in
             guard let a=occurrences.first(where:{$0.id==source}) else { return }
             if let target,let b=occurrences.first(where:{$0.id==target}),a.id != b.id {
                 let between=occurrences.filter{$0.start>=min(a.end,b.end) && $0.end<=max(a.start,b.start)}.map(\.surface).joined(separator:" · ")
-                dragMessage=between.isEmpty ? "Hold, then drag onto the preceding or following term." : "The saved text has ‘\(between)’ between these terms. Open word details and choose See in context to inspect and edit the saved segmentation. No intervening text is skipped automatically."
+                dragMessage=between.isEmpty ? "Hold, then drag onto the preceding or following term." : "The saved text has ‘\(between)’ between these terms. Inspect the context strip to edit or discard that text explicitly. No intervening text is skipped automatically."
             } else { dragMessage="Hold, then drag onto the preceding or following term. Release over its highlight to join." }
         }
+        coordinator.onOutsideTap = { [weak coordinator,weak model] in if model?.editingParse != true { coordinator?.stopEditing() } }
         coordinator.onMerge = { [weak model] first,second in Task { await model?.merge(first,second) } }
+    }
+    private func contextAnnotations(_ page:PageCapture)->[String:String] {
+        Dictionary(uniqueKeysWithValues:occurrences.compactMap { item in
+            let changes=CorrectionMapping.history(item,page:page)
+            guard let change=changes.last else { return item.corrected ? (item.id,"Previously edited") : nil }
+            return (item.id,"\(change.before.isEmpty ? "∅" : change.before) → \(change.after.isEmpty ? "∅" : change.after)\(changes.count>1 ? " +\(changes.count-1)" : "")")
+        })
+    }
+    private func contextAction(_ name:String,_ item:Occurrence) {
+        guard !model.editingParse else { return }
+        coordinator.photoTap(item)
+        switch name {
+        case "Edit":coordinator.startEditing(item)
+        case "Join":coordinator.joinRange=item.start..<item.end;coordinator.interaction = .joining
+        case "Shatter":apply(.shatter(item.id))
+        case "Discard":apply(.replace(item.id,"",.typing))
+        default:
+            if name.hasPrefix("Merge:"),let other=occurrences.first(where:{$0.id==String(name.dropFirst(6))}),let range=try? ParseGesture.mergeRange(item,other,in:occurrences) { apply(.join(range)) }
+        }
+    }
+    private func apply(_ command:PageEditCommand) {
+        Task { if await model.editPage(pageID,command:command) { coordinator.joinRange=nil;coordinator.interaction = .browsing;coordinator.undoNotice=true } }
+    }
+    private func openRequestedEditor() {
+        guard let id=model.pendingPageEditorID,let item=occurrences.first(where:{$0.id==id}) else { return }
+        model.pendingPageEditorID=nil
+        DispatchQueue.main.asyncAfter(deadline:.now()+0.3) { coordinator.startEditing(item) }
     }
     private func reconcileOrder(reset:Bool=false) {
         let ranked=recommendations.map(\.id)
@@ -161,6 +216,7 @@ struct PhotoWordRow:View {
             Text(item.lexeme.definitions.first ?? "No dictionary match").font(.subheadline).lineLimit(2,reservesSpace:true)
             Text(locationAvailable ? (item.reasons.isEmpty ? (item.secondary ? "Check reading or meaning" : " ") : item.reasons.joined(separator:" · ")) : "Photo location unavailable")
                 .font(.caption).foregroundStyle(.secondary).lineLimit(1)
+            if occurrence.needsExampleRepair { Label("Example needs repair",systemImage:"exclamationmark.triangle").font(.caption).foregroundStyle(.orange) }
             OccurrenceCorrectionBadge(occurrence:occurrence)
         }.frame(maxWidth:.infinity,alignment:.leading)
     }
@@ -207,8 +263,8 @@ private struct InteractivePhotoWordRow:View {
             .contentShape(Rectangle())
             .simultaneousGesture(LongPressGesture(minimumDuration:0.35).exclusively(before:TapGesture()).onEnded { value in
                 switch value {
-                case .first: coordinator.detailOccurrence=occurrence
-                case .second: coordinator.rowTap(occurrence)
+                case .first: if coordinator.interaction != .editing { coordinator.detailOccurrence=occurrence }
+                case .second: if coordinator.interaction == .editing { coordinator.stopEditing() } else { coordinator.rowTap(occurrence) }
                 }
             })
             .swipeActions(edge:.leading,allowsFullSwipe:true) {

@@ -2,7 +2,17 @@ import SwiftUI
 import UIKit
 import Combine
 
+enum PageInteraction { case browsing,dragging,joining,editing }
+
 @MainActor final class PhotoPageCoordinator: ObservableObject {
+    @Published var interaction=PageInteraction.browsing
+    @Published var editorOccurrence:Occurrence?
+    @Published var joinRange:Range<Int>?
+    @Published var editFocusRequest=0
+    @Published var undoNotice=false
+    var onOutsideTap:(()->Void)?
+    func startEditing(_ occurrence:Occurrence) { joinRange=nil;interaction = .editing;editorOccurrence=occurrence;photoTap(occurrence);editFocusRequest += 1 }
+    func stopEditing() { editorOccurrence=nil;interaction = .browsing }
     @Published var showAll=false
     @Published var pageOrder=false
     @Published var wordsOnly=false
@@ -25,7 +35,7 @@ import Combine
     func photoTap(_ occurrence:Occurrence) {
         activeOccurrenceID=occurrence.id; scrollWordID=occurrence.lexemeID; scrollRequest += 1
     }
-    func rowTap(_ occurrence:Occurrence) { activeOccurrenceID=occurrence.id; wordsOnly=false; revealRequest += 1 }
+    func rowTap(_ occurrence:Occurrence) { photoTap(occurrence);wordsOnly=false;revealRequest += 1 }
     func focus(in occurrences:[Occurrence],lexemeID:String)->Occurrence? {
         occurrences.first{$0.id==activeOccurrenceID && $0.lexemeID==lexemeID} ?? occurrences.filter{$0.lexemeID==lexemeID}.sorted{$0.start<$1.start}.first
     }
@@ -43,6 +53,7 @@ struct ZoomablePage: UIViewRepresentable {
     func updateUIView(_ view:PhotoScrollView,context:Context) {
         if let grid { view.configureGrid(grid,occurrences:occurrences,visibleIDs:visibleIDs,scores:scores) }
         else { view.configure(url:url,regions:regions,occurrences:occurrences,visibleIDs:visibleIDs,scores:scores) }
+        if view.lastEditFocus != page.editFocusRequest { view.lastEditFocus=page.editFocusRequest;view.focusForEditing(page.activeOccurrenceID) }
         if view.lastReset != page.resetRequest { view.lastReset=page.resetRequest; view.resetZoom() }
         if view.lastReveal != page.revealRequest { view.lastReveal=page.revealRequest; view.reveal(page.activeOccurrenceID) }
     }
@@ -64,6 +75,7 @@ final class PhotoScrollView: UIView, UIScrollViewDelegate, UIGestureRecognizerDe
     private var regions:[TermRegion]=[]
     private var rawRegions:[TermRegion]=[]
     private var raster:PageRaster?
+    private var inkCache=InkGeometryCache()
     private var alignmentTask:Task<Void,Never>?
     private var alignmentVersion=0
     private var occurrences:[Occurrence]=[]
@@ -79,6 +91,7 @@ final class PhotoScrollView: UIView, UIScrollViewDelegate, UIGestureRecognizerDe
     private var neighbors:Set<String> { dragSession.neighbors }
     private let haptic=UISelectionFeedbackGenerator()
     private var pendingReveal:String?
+    var lastEditFocus=0
     var lastReset=0
     var lastReveal=0
     init(page:PhotoPageCoordinator) {
@@ -124,7 +137,7 @@ final class PhotoScrollView: UIView, UIScrollViewDelegate, UIGestureRecognizerDe
     func configure(url:URL,regions:[TermRegion],occurrences:[Occurrence],visibleIDs:Set<String>,scores:[String:Double]) {
         let entering=gridMode; switchMode(false)
         if imageURL != url || entering {
-            alignmentTask?.cancel(); alignmentVersion += 1; raster=nil; rawRegions=[]
+            alignmentTask?.cancel(); alignmentVersion += 1; raster=nil; inkCache=InkGeometryCache(); rawRegions=[]
             imageURL=url; photograph.image=UIImage(contentsOfFile:url.path)?.normalized()
             let size=photograph.image?.size ?? CGSize(width:1,height:1)
             let relative=page.relativeZoom
@@ -141,14 +154,15 @@ final class PhotoScrollView: UIView, UIScrollViewDelegate, UIGestureRecognizerDe
     }
     private func alignToInk() {
         alignmentTask?.cancel(); alignmentVersion += 1
-        let version=alignmentVersion, input=rawRegions, cached=raster, image=photograph.image?.cgImage
+        let version=alignmentVersion, input=rawRegions, cached=raster, cachedFits=inkCache, image=photograph.image?.cgImage
         alignmentTask=Task { [weak self] in
-            let result=await Task.detached(priority:.userInitiated) { () -> (PageRaster?,[TermRegion]) in
+            let result=await Task.detached(priority:.userInitiated) { () -> (PageRaster?,[TermRegion],InkGeometryCache) in
                 let raster=cached ?? image.flatMap(PhotoRaster.make)
-                return (raster,raster.map{InkGeometry.refine(input,raster:$0)} ?? input)
+                var cache=cachedFits
+                return (raster,raster.map{InkGeometry.refine(input,raster:$0,cache:&cache)} ?? input,cache)
             }.value
             guard !Task.isCancelled, let self, version==self.alignmentVersion else { return }
-            self.raster=result.0; self.cancelDrag(); self.regions=result.1; self.redraw()
+            self.raster=result.0; self.inkCache=result.2; self.cancelDrag(); self.regions=result.1; self.redraw()
         }
     }
     override func layoutSubviews() {
@@ -238,7 +252,7 @@ final class PhotoScrollView: UIView, UIScrollViewDelegate, UIGestureRecognizerDe
                 return hypot(x.midX-point.x,x.midY-point.y)<hypot(y.midX-point.x,y.midY-point.y)
             }?.occurrenceID
     }
-    @objc private func tapped(_ recognizer:UITapGestureRecognizer) { if let id=hit(recognizer.location(in:canvas)) { page.onTap?(id) } }
+    @objc private func tapped(_ recognizer:UITapGestureRecognizer) { if page.interaction == .editing { page.onOutsideTap?();return };if let id=hit(recognizer.location(in:canvas)) { page.onTap?(id) } }
     @objc private func doubleTapped(_ recognizer:UITapGestureRecognizer) {
         cancelDrag()
         if scroll.zoomScale>fit*1.1 { scroll.setZoomScale(fit,animated:true) }
@@ -253,8 +267,8 @@ final class PhotoScrollView: UIView, UIScrollViewDelegate, UIGestureRecognizerDe
         let point=recognizer.location(in:canvas)
         switch recognizer.state {
         case .began:
-            guard let id=hit(point) else { return }
-            dragSession.begin(id,occurrences:occurrences); pressPoint=point
+            guard page.interaction == .browsing,let id=hit(point) else { return }
+            dragSession.begin(id,occurrences:occurrences);page.interaction = .dragging;pressPoint=point
             scroll.panGestureRecognizer.isEnabled=false; haptic.prepare(); haptic.selectionChanged(); redraw()
             for region in regions where region.occurrenceID==id { shapes[region.id]?.shadowColor=UIColor.black.cgColor; shapes[region.id]?.shadowOpacity=0.6; shapes[region.id]?.shadowRadius=4/max(scroll.zoomScale,0.01) }
         case .changed:
@@ -273,7 +287,7 @@ final class PhotoScrollView: UIView, UIScrollViewDelegate, UIGestureRecognizerDe
             CATransaction.commit()
         case .ended:
             let source=sourceID, moved=dragSession.moved, attempted=hit(point,includingHidden:true)
-            let result=dragSession.end(); scroll.panGestureRecognizer.isEnabled=true; redraw()
+            let result=dragSession.end();page.interaction = .browsing;scroll.panGestureRecognizer.isEnabled=true;redraw()
             switch result {
             case .split(let source): page.onSplit?(source)
             case .merge(let source,let target): page.onMerge?(source,target)
@@ -285,8 +299,18 @@ final class PhotoScrollView: UIView, UIScrollViewDelegate, UIGestureRecognizerDe
     }
     private func cancelDrag() {
         let wasActive=sourceID != nil
-        dragSession.cancel(); scroll.panGestureRecognizer.isEnabled=true
+        dragSession.cancel();if page.interaction == .dragging { page.interaction = .browsing };scroll.panGestureRecognizer.isEnabled=true
         if wasActive { redraw() }
+    }
+    func focusForEditing(_ id:String?) {
+        guard let id,bounds.width>0 else { return }
+        let matches=regions.filter{$0.occurrenceID==id}
+        guard let first=matches.first else { return }
+        let rect=matches.dropFirst().reduce(path(first).bounds){$0.union(path($1).bounds)}
+        let scale=min(scroll.maximumZoomScale,max(fit,min(bounds.width*0.65/max(1,rect.width),bounds.height*0.3/max(1,rect.height))))
+        scroll.setZoomScale(scale,animated:false)
+        let target=CGPoint(x:rect.midX*scale-bounds.width/2,y:rect.midY*scale-bounds.height*0.80)
+        scroll.setContentOffset(CGPoint(x:max(-scroll.contentInset.left,min(target.x,scroll.contentSize.width-bounds.width+scroll.contentInset.right)),y:max(-scroll.contentInset.top,min(target.y,scroll.contentSize.height-bounds.height+scroll.contentInset.bottom))),animated:false)
     }
     func reveal(_ id:String?) {
         guard let id else { return }

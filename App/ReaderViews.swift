@@ -92,7 +92,9 @@ struct WordDetail: View {
         NavigationStack {
             List {
                 Section {
-                    WordCorrectionControls(occurrence:occurrence,beforePreview:{saveIfNeeded()},didApply:{dismiss()},dirtyChanged:{correctionDirty=$0})
+                    Text(occurrence.surface).font(.largeTitle)
+                    Button("Edit on page") { if saveIfNeeded() { dismiss();model.openPageEditor(occurrence) } }
+                    OccurrenceCorrectionBadge(occurrence:occurrence)
                     Text(item.lexeme.reading).font(.title3)
                     ForEach(Array(item.lexeme.definitions.enumerated()),id:\.offset) { _,definition in Text(definition) }
                 }
@@ -101,6 +103,9 @@ struct WordDetail: View {
                         TextField("Example",text:Binding(get:{context?.draft ?? ""},set:{context?.draft=$0}),axis:.vertical).lineLimit(3...12)
                         if !valid { Text("Keep the target word in the example.").font(.caption).foregroundStyle(.red) }
                         if ExampleContext.isFragment(text:page.text,start:context?.start,end:context?.end) { Text("May continue beyond this photo").font(.caption).foregroundStyle(.secondary) }
+                        if let alternatives=occurrence.exampleAlternatives,!alternatives.isEmpty {
+                            DisclosureGroup("Saved manual examples") { ForEach(Array(alternatives.enumerated()),id:\.offset) { _,example in Button(example.text) { context?.draft=example.text } } }
+                        }
                         Button("Add preceding sentence") { context?.prepend(from:page.text) }.disabled(context?.start==0)
                         Button("Add following sentence") { context?.append(from:page.text) }.disabled((context?.end ?? 0)>=page.text.unicodeScalars.count)
                         Button("Choose context from page text") { expand=true }
@@ -113,7 +118,6 @@ struct WordDetail: View {
                     Button("Known") { if saveIfNeeded() { model.classify(item,known:true,pageID:occurrence.captureID); dismiss() } }
                     Button("Unknown · exclude this photo") { if saveIfNeeded() { model.classify(item,known:false,pageID:occurrence.captureID); dismiss() } }
                     Button("Edit reading or definition") { if saveIfNeeded() { correction=true } }
-                    Button("Change word boundaries") { if saveIfNeeded() { cuts=true } }
                     Button("Choose dictionary entry or reading") { if saveIfNeeded() { dictionary=true } }
                 }
                 Section("Other occurrences · tap to select example") {
@@ -130,7 +134,6 @@ struct WordDetail: View {
                 .toolbar { Button("Done") { if correctionDirty { confirmCorrectionLeave=true } else if dirty { confirmLeave=true } else { dismiss() } } }
                 .onAppear { if context==nil, let page=sourcePage { context=ExampleContext(page:page,occurrence:occurrence); savedContext=context } }
                 .sheet(isPresented:$correction,onDismiss:{dismiss()}) { CorrectionForm(item:item) }
-                .sheet(isPresented:$cuts,onDismiss:{dismiss()}) { if let page=sourcePage { SegmentationEditor(page:page,anchor:occurrence) } }
                 .sheet(isPresented:$dictionary,onDismiss:{dismiss()}) { DictionaryChoice(occurrence:occurrence) }
                 .sheet(isPresented:$expand) { if let page=sourcePage, let initial=context { ExampleRangeEditor(page:page,occurrence:occurrence,initial:initial) { context=$0 } } }
                 .confirmationDialog("Save example changes?",isPresented:$confirmLeave,titleVisibility:.visible) {
