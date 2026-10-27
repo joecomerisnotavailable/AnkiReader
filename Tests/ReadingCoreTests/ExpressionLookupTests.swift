@@ -83,3 +83,62 @@ final class ExpressionLookupTests:XCTestCase {
         }
     }
 }
+
+extension ExpressionLookupTests {
+    func testDefaultParsingGroupsInflections() throws {
+        try withDictionary { dictionary in
+            for (stem,lemma,ending,pos) in [("貼っ","貼る","て","助詞,接続助詞"),("高かっ","高い","た","助動詞")] {
+                let analyzer=tokens([(stem,lemma,lemma=="高い" ? "形容詞,一般" : "動詞,一般"),(ending,ending,pos),("猫","猫","名詞")])
+                let page=try ReadingPipeline.analyze(captureID:"page",recognition:Recognition(engine:"fixture",lines:[],elapsed:0),text:stem+ending+"猫",tokenizer:analyzer,dictionary:dictionary)
+                XCTAssertEqual(page.occurrences.map(\.surface),[stem+ending,"猫"])
+                XCTAssertEqual(page.occurrences[0].lexemeID,"dict:"+lemma)
+                XCTAssertEqual(page.occurrences[1].start,(stem+ending).unicodeScalars.count)
+            }
+        }
+        let eat=tokens([("食べ","食べる","動詞,一般"),("て","て","助詞,接続助詞"),("猫","猫","名詞")])
+        XCTAssertEqual(ReadingWords.grouped(eat.tokens).map(\.surface),["食べて","猫"])
+        XCTAssertEqual(ReadingWords.grouped(eat.tokens).first?.lemma,"食べる")
+        let progressive=tokens([("食べ","食べる","動詞,一般"),("て","て","助詞,接続助詞"),("い","いる","動詞,非自立可能"),("た","た","助動詞")])
+        XCTAssertEqual(ReadingWords.grouped(progressive.tokens).map(\.surface),["食べていた"])
+        XCTAssertEqual(ReadingWords.grouped(progressive.tokens).first?.lemma,"食べる")
+    }
+    func testSpellingSpecificHeadwordAndSenses() throws {
+        let url=URL(fileURLWithPath:#filePath).deletingLastPathComponent().deletingLastPathComponent().deletingLastPathComponent().appendingPathComponent("Resources/dictionary.sqlite")
+        guard FileManager.default.fileExists(atPath:url.path) else { throw XCTSkip("Local dictionary required") }
+        let dictionary=try DictionaryIndex(url:url)
+        let paste=try XCTUnwrap(dictionary.lookup("貼る").first),stretch=try XCTUnwrap(dictionary.lookup("張る").first)
+        XCTAssertEqual(paste.expression,"貼る");XCTAssertEqual(stretch.expression,"張る")
+        XCTAssertNotEqual(paste.id,stretch.id)
+        XCTAssertTrue(paste.definitions.first?.contains("paste") == true)
+        XCTAssertFalse(paste.definitions.contains{$0.contains("tile")})
+        XCTAssertTrue(stretch.definitions.contains{$0.contains("tile")})
+    }
+}
+
+extension ExpressionLookupTests {
+    func testWholeDictionaryWordsWinOverNumeralAndCounterPieces() throws {
+        let url=URL(fileURLWithPath:#filePath).deletingLastPathComponent().deletingLastPathComponent().deletingLastPathComponent().appendingPathComponent("Resources/dictionary.sqlite")
+        guard FileManager.default.fileExists(atPath:url.path) else { throw XCTSkip("Local dictionary required") }
+        let dictionary=try DictionaryIndex(url:url)
+        for (stem,expected) in [("ひと","一つ"),("ふた","二つ")] {
+            let analyzer=tokens([(stem,stem,"名詞,数詞"),("つ","つ","接尾辞,名詞的,助数詞"),("だけ","だけ","助詞,副助詞"),("。","。","補助記号")])
+            let page=try ReadingPipeline.analyze(captureID:"p",recognition:Recognition(engine:"fixture",lines:[],elapsed:0),text:stem+"つだけ。",tokenizer:analyzer,dictionary:dictionary)
+            XCTAssertEqual(page.occurrences.map(\.surface),[stem+"つ","だけ","。"])
+            let word=try XCTUnwrap(page.lexemes.first{$0.id==page.occurrences[0].lexemeID})
+            XCTAssertEqual(word.expression,expected)
+            XCTAssertEqual(page.occurrences[0].start,0);XCTAssertEqual(page.occurrences[0].end,3)
+        }
+        let blocked=tokens([("ひと","ひと","名詞"),(" "," ","空白"),("つ","つ","接尾辞")])
+        XCTAssertEqual(try dictionary.readingTokens(blocked.tokens).map(\.surface),["ひと"," ","つ"])
+        var gap=tokens([("ひと","ひと","名詞"),("つ","つ","接尾辞")]);gap.tokens[1].start=3;gap.tokens[1].end=4
+        XCTAssertEqual(try dictionary.readingTokens(gap.tokens).count,2)
+    }
+    func testLongestExactMatchDoesNotConsumeUnlistedNeighbors() throws {
+        try withDictionary { dictionary in
+            let analyzer=tokens([("貼って","貼る","動詞"),("ある","ある","動詞"),("猫","猫","名詞"),("。","。","補助記号")])
+            let grouped=try dictionary.readingTokens(analyzer.tokens)
+            XCTAssertEqual(grouped.map(\.surface),["貼ってある","猫","。"])
+            XCTAssertEqual(grouped[0].lemma,"貼ってある")
+        }
+    }
+}

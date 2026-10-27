@@ -86,7 +86,8 @@ private struct FinalReviewRow:View {
             HStack {
                 Button(action:showDetail) {
                     VStack(alignment:.leading,spacing:4) {
-                        Text(item.occurrence.surface).font(.title3.weight(.semibold))
+                        Text(item.lexeme.expression).font(.title3.weight(.semibold))
+                        if item.occurrence.surface != item.lexeme.expression { Text("On page: \(item.occurrence.surface)").font(.caption).foregroundStyle(.secondary) }
                         Text(item.lexeme.reading).font(.subheadline).foregroundStyle(.secondary)
                     }.frame(maxWidth:.infinity,alignment:.leading)
                 }.buttonStyle(.plain)
@@ -100,6 +101,7 @@ private struct FinalReviewRow:View {
                 } label:{ Label(label,systemImage:symbol).font(.subheadline).padding(.vertical,6) }
                 .accessibilityLabel("Review mark: \(label). Actions for \(item.occurrence.surface)")
             }
+            PitchAccentView(word:item.lexeme)
             Text(item.lexeme.definitions.first ?? "No dictionary match").font(.subheadline).lineLimit(2)
             if item.occurrence.needsExampleRepair { Label("Example needs repair",systemImage:"exclamationmark.triangle").foregroundStyle(.orange).font(.caption) }
             OccurrenceCorrectionBadge(occurrence:item.occurrence)

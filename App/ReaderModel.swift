@@ -10,6 +10,7 @@ final class ReadingWorker: @unchecked Sendable {
     private var dictionaryURL: URL?
     private let libraryRoot = FileManager.default.urls(for: .documentDirectory, in: .userDomainMask)[0].appendingPathComponent("ReadingLibrary")
     private var recognizer: GoogleRecognizer?
+    private let columnRefiner=ColumnRecognitionRefiner()
     private func prepare() throws {
         if tokenizer == nil { tokenizer = try SudachiAnalyzer(directory: Bundle.main.resourceURL!.appendingPathComponent("sudachi")) }
         let url = try DictionaryVersions.current(root: libraryRoot, bundled: Bundle.main.url(forResource: "dictionary", withExtension: "sqlite")!)
@@ -25,12 +26,25 @@ final class ReadingWorker: @unchecked Sendable {
                     else {
                         if recognizer == nil { recognizer = GoogleRecognizer() }
                         guard let image = UIImage(data: try Data(contentsOf: url))?.normalized() else { throw StorageError.database("Cannot decode the saved photo") }
-                        recognition = try recognizer!.recognize(image, layout: capture.layout == "Horizontal" ? .horizontal : .vertical)
+                        let raw = try recognizer!.recognize(image, layout: capture.layout == "Horizontal" ? .horizontal : .vertical)
+                        recognition = (try? columnRefiner.refine(raw,image:image,vertical:capture.layout != "Horizontal")) ?? raw
                     }
                     let page = try ReadingPipeline.analyze(captureID: capture.id, recognition: recognition,
                         text: capture.correctedText, tokenizer: tokenizer!, dictionary: dictionary!, preferences: preferences)
                     continuation.resume(returning: page)
                 } catch { continuation.resume(throwing: error) }
+            }
+        }
+    }
+    func refineSaved(_ capture:PageCapture,url:URL,preferences:[String:Lexeme],preferredLineID:String?,preferredLineFraction:Double?) async throws -> AnalyzedPage {
+        try await withCheckedThrowingContinuation { continuation in
+            queue.async { [self] in
+                do {
+                    try prepare()
+                    guard let saved=capture.recognition,let image=UIImage(data:try Data(contentsOf:url))?.normalized() else { throw StorageError.database("The saved photo is unavailable.") }
+                    let recognition=try columnRefiner.refine(saved,image:image,vertical:capture.layout != "Horizontal",preferredLineID:preferredLineID,preferredLineFraction:preferredLineFraction)
+                    continuation.resume(returning:try ReadingPipeline.analyze(captureID:capture.id,recognition:recognition,tokenizer:tokenizer!,dictionary:dictionary!,preferences:preferences))
+                } catch { continuation.resume(throwing:error) }
             }
         }
     }
@@ -105,6 +119,7 @@ final class ReadingWorker: @unchecked Sendable {
     @Published var removedRetainedWord:RetainedWord?
     @Published var parseUndo: ParseUndo?
     @Published var correctionUndo: CorrectionUndo?
+    @Published var parsingSuggestions:[String:[ParsingSuggestion]]=[:]
     @Published var pageEditHistory:[String:[PageEditUndo]]=[:]
     @Published var pendingPageEditorID:String?
     @Published var lastPageEditStart:[String:Int]=[:]

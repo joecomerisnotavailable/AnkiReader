@@ -90,7 +90,7 @@ struct PhotoPageScreen: View {
                                         Button("Confirm join") { apply(.join(range)) }.disabled(model.editingParse)
                                     }.padding(.horizontal,8)
                                 }
-                                ContextStrip(text:page.text,occurrences:occurrences,scores:scores,page:coordinator,annotations:contextAnnotations(page),disabled:model.editingParse,action:contextAction)
+                                ContextStrip(text:page.text,occurrences:occurrences,scores:scores,page:coordinator,annotations:contextAnnotations(page),suggestions:model.parsingSuggestions[pageID] ?? [],suggestionAction:{ suggestion,accept in if accept { Task { await model.acceptParsing(suggestion,pageID:pageID) } } else { model.dismissParsing(suggestion,pageID:pageID) } },disabled:model.editingParse,action:contextAction).padding(.top,-100)
                             }.frame(height:contextHeight).zIndex(2)
                             Divider()
                         }
@@ -103,6 +103,10 @@ struct PhotoPageScreen: View {
             Picker("Sort",selection:$coordinator.pageOrder) { Text("Recommended").tag(false); Text("Page order").tag(true) }
             Toggle("Show all words",isOn:$coordinator.showAll)
             Toggle("Words only",isOn:$coordinator.wordsOnly)
+            Button("Repair column order",systemImage:"text.line.first.and.arrowtriangle.forward") { model.repairPageOrder(pageID) }.disabled(model.editingParse)
+            if model.state.canRefineCapture(pageID) {
+                Button("Refine printed text",systemImage:"viewfinder") { Task {await model.refineSavedCapture(pageID,occurrenceID:coordinator.activeOccurrenceID)} }.disabled(model.editingParse)
+            }
             Button("Reset zoom",systemImage:"arrow.up.left.and.arrow.down.right") { coordinator.resetRequest += 1 }
             if page?.status == .failed { Button("Retry recognition") { model.retry(pageID) } }
             if !(model.pageEditHistory[pageID] ?? []).isEmpty { Button("Undo last edit",systemImage:"arrow.uturn.backward") { model.undoPageEdit(pageID) }.disabled(model.editingParse) }
@@ -207,12 +211,13 @@ struct PhotoWordRow:View {
     var body:some View {
         VStack(alignment:.leading,spacing:4) {
             HStack(alignment:.firstTextBaseline) {
-                Text(occurrence.surface).font(.title3.weight(.semibold))
+                Text(item.lexeme.expression).font(.title3.weight(.semibold))
                 Text(item.lexeme.reading).font(.subheadline).foregroundStyle(.secondary)
                 Spacer(minLength:4)
                 if item.selected { Image(systemName:"checkmark.circle.fill").foregroundStyle(.green).accessibilityLabel("Selected") }
             }
-            if occurrence.surface != item.lexeme.expression { Text("Dictionary: \(item.lexeme.expression)").font(.caption).foregroundStyle(.secondary) }
+            if occurrence.surface != item.lexeme.expression { Text("On page: \(occurrence.surface)").font(.caption).foregroundStyle(.secondary) }
+            PitchAccentView(word:item.lexeme)
             Text(item.lexeme.definitions.first ?? "No dictionary match").font(.subheadline).lineLimit(2,reservesSpace:true)
             Text(locationAvailable ? (item.reasons.isEmpty ? (item.secondary ? "Check reading or meaning" : " ") : item.reasons.joined(separator:" · ")) : "Photo location unavailable")
                 .font(.caption).foregroundStyle(.secondary).lineLimit(1)

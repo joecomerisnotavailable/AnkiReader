@@ -64,3 +64,19 @@ final class PageEditingTests:XCTestCase {
         XCTAssertEqual(CorrectionMapping.history(s.occurrences.first{$0.start==0}!,page:s.captures[0]).first?.before,"に")
     }
 }
+
+extension PageEditingTests {
+    func testParsingSuggestionsRemainOptionalAndDismissalsSurviveBackup() throws {
+        var state=fixture("なだめる。",parts:["なだ","め","る","。"]) // after deleting the spurious に
+        var page=state.captures[0];page.textRevision=3
+        let proposal=Occurrence(captureID:page.id,lexemeID:"calm",surface:"なだめる",start:0,end:4,sentence:"",fragment:false)
+        let hints=ParsingSuggestion.changedTerms([proposal],page:page,current:state.occurrences,anchor:0)
+        XCTAssertEqual(hints.count,1);XCTAssertEqual(hints[0].revision,3)
+        XCTAssertEqual(state.occurrences.map(\.surface),["なだ","め","る","。"])
+        page.dismissedParsingSuggestions=[hints[0].id];state.captures=[page]
+        let restored=try JSONDecoder().decode(LibraryState.self,from:JSONEncoder().encode(state))
+        XCTAssertTrue(ParsingSuggestion.changedTerms([proposal],page:restored.captures[0],current:restored.occurrences,anchor:0).isEmpty)
+        let segments=try PageEditing.segments(page:page,occurrences:state.occurrences,command:.join(hints[0].start..<hints[0].end))
+        XCTAssertEqual(segments.1,["なだめる"])
+    }
+}

@@ -16,12 +16,12 @@ struct CorrectionCrop {
     var end:Int
 }
 enum CorrectionPhoto {
-    static func crop(page:PageCapture,target:Occurrence,all:[Occurrence],url:URL,context:Bool)->CorrectionCrop? {
-        guard page.photoRemoved != true,let image=UIImage(contentsOfFile:url.path)?.normalized(),let cg=image.cgImage else { return nil }
-        let window=context ? CorrectionMapping.window(target,in:all,text:page.text) : target.start..<target.end
+    static func crop(page:PageCapture,target:Occurrence,image:UIImage,raster:PageRaster?,cache:inout InkGeometryCache)->CorrectionCrop? {
+        guard let cg=image.cgImage else { return nil }
+        let window=target.start..<target.end
         var anchor=target;anchor.start=window.lowerBound;anchor.end=window.upperBound
         let raw=TermGeometry.regions(page:page,occurrences:[anchor])
-        let regions=PhotoRaster.make(cg).map{InkGeometry.refine(raw,raster:$0)} ?? raw
+        let regions=raster.map{InkGeometry.refine(raw,raster:$0,cache:&cache)} ?? raw
         let points=regions.flatMap(\.corners)
         guard let x=points.map(\.x).min(),let y=points.map(\.y).min(),let x2=points.map(\.x).max(),let y2=points.map(\.y).max() else { return nil }
         // Native normalized pixels, padding retains glyph edges without a full-page pass.
@@ -34,37 +34,50 @@ actor PhotoCorrectionService {
     static let shared=PhotoCorrectionService()
     private var cache:[String:[PhotoCorrectionCandidate]]=[:]
     func candidates(page:PageCapture,target:Occurrence,all:[Occurrence],url:URL) async throws -> [PhotoCorrectionCandidate] {
+        #if UI_FIXTURE
+        if ProcessInfo.processInfo.arguments.contains("--alternatives-fixture") {
+            return [PhotoCorrectionCandidate(text:"なだめる",replacement:"なだめる",engine:"fixture")]
+        }
+        #endif
         let key="\(page.id):\(page.textRevision ?? 0):\(target.start):\(target.end)"
         if let saved=cache[key] { return saved }
-        let result=try await Task.detached(priority:.userInitiated) { () throws -> [PhotoCorrectionCandidate] in
-            guard let crop=CorrectionPhoto.crop(page:page,target:target,all:all,url:url,context:true),let cg=crop.image.cgImage else { throw StorageError.invalidArchive("The photo or this text's location is unavailable. You can still type or draw the correction.") }
-            let started=Date()
-            defer { Logger(subsystem:"ReadingCompanion",category:"correction").info("Crop alternatives duration: \(Date().timeIntervalSince(started),privacy:.public) seconds") }
-            let request=VNRecognizeTextRequest();request.recognitionLevel = .accurate
-            request.recognitionLanguages=["ja-JP","en-US"];request.usesLanguageCorrection=false
-            _ = try? VNImageRequestHandler(cgImage:cg,orientation:.up).perform([request])
-            let observations=(request.results ?? []).sorted { a,b in
-                if page.layout=="Horizontal" { return a.boundingBox.midY>b.boundingBox.midY }
-                return a.boundingBox.midX>b.boundingBox.midX
+        let work=Task.detached(priority:.userInitiated) { () throws -> [PhotoCorrectionCandidate] in
+            let original=JapaneseText.slice(page.text,target.start,target.end)
+            guard original.count<=6 else { throw StorageError.invalidArchive("Select the character you want to correct in the text field, then try alternatives.") }
+            guard page.photoRemoved != true,let image=UIImage(contentsOfFile:url.path)?.normalized(),let cg=image.cgImage else {
+                throw StorageError.invalidArchive("The saved photo is unavailable. You can still type or draw the correction.")
             }
-            var proposals:[(String,String)]=[]
-            for rank in 0..<5 {
-                let parts=observations.compactMap { observation -> String? in
-                    let candidates=observation.topCandidates(5)
-                    return (rank<candidates.count ? candidates[rank] : candidates.first)?.string
+            let raster=PhotoRaster.make(cg)
+            var geometryCache=InkGeometryCache(),foundCrop=false
+            var offset=target.start,ranked:[(Int,PhotoCorrectionCandidate)]=[]
+            for character in original {
+                try Task.checkCancellation()
+                let width=String(character).unicodeScalars.count
+                var cell=target;cell.start=offset;cell.end=offset+width
+                defer { offset += width }
+                guard let crop=CorrectionPhoto.crop(page:page,target:cell,image:image,raster:raster,cache:&geometryCache),let cg=crop.image.cgImage else { continue }
+                foundCrop=true
+                let request=VNRecognizeTextRequest();request.recognitionLevel = .accurate
+                request.recognitionLanguages=["ja-JP"];request.usesLanguageCorrection=false
+                _ = try? VNImageRequestHandler(cgImage:cg,orientation:.up).perform([request])
+                var values:[(String,String)]=[]
+                for observation in request.results ?? [] {
+                    values += observation.topCandidates(5).map{($0.string,"Vision character crop")}
                 }
-                if !parts.isEmpty { proposals.append((parts.joined(),"Vision")) }
+                try Task.checkCancellation()
+                if let ml=try? GoogleRecognizer().recognize(crop.image,layout:page.layout=="Horizontal" ? .horizontal : .vertical) { values.append((ml.text,"ML Kit character crop")) }
+                for (rank,pair) in values.enumerated() {
+                    let candidate=pair.0.trimmingCharacters(in:.whitespacesAndNewlines)
+                    guard candidate.count==1,candidate != String(character),
+                          let changed=CorrectionCandidates.characterReplacement(original:original,offset:offset-target.start,length:width,candidate:candidate) else { continue }
+                    ranked.append((rank,PhotoCorrectionCandidate(text:changed,replacement:changed,engine:pair.1)))
+                }
             }
-            // One retry on the local crop; never replaces capture recognition.
-            if let ml=try? GoogleRecognizer().recognize(crop.image,layout:page.layout=="Horizontal" ? .horizontal : .vertical) { proposals.append((ml.text,"ML Kit crop")) }
+            guard foundCrop else { throw StorageError.invalidArchive("This character has no mapped photo location. You can still type or draw it.") }
             var seen=Set<String>()
-            return proposals.compactMap { text,engine -> PhotoCorrectionCandidate? in
-                let clean=text.trimmingCharacters(in:.whitespacesAndNewlines)
-                guard !clean.isEmpty,seen.insert(clean).inserted else { return nil }
-                let replacement=CorrectionCandidates.replacement(candidate:clean,context:crop.text,start:target.start-crop.start,end:target.end-crop.start)
-                return PhotoCorrectionCandidate(text:clean,replacement:replacement,engine:engine)
-            }.prefix(5).map{$0}
-        }.value
+            return ranked.sorted{$0.0<$1.0}.map(\.1).filter{seen.insert($0.text).inserted}.prefix(5).map{$0}
+        }
+        let result=try await withTaskCancellationHandler(operation:{try await work.value},onCancel:{work.cancel()})
         if cache.count>=32 { cache.removeAll() };cache[key]=result
         return result
     }

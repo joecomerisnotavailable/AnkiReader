@@ -92,10 +92,12 @@ struct WordDetail: View {
         NavigationStack {
             List {
                 Section {
-                    Text(occurrence.surface).font(.largeTitle)
+                    Text(item.lexeme.expression).font(.largeTitle)
+                    if occurrence.surface != item.lexeme.expression { Text("On page: \(occurrence.surface)").foregroundStyle(.secondary) }
                     Button("Edit on page") { if saveIfNeeded() { dismiss();model.openPageEditor(occurrence) } }
                     OccurrenceCorrectionBadge(occurrence:occurrence)
                     Text(item.lexeme.reading).font(.title3)
+                    PitchAccentView(word:item.lexeme)
                     ForEach(Array(item.lexeme.definitions.enumerated()),id:\.offset) { _,definition in Text(definition) }
                 }
                 if let page=sourcePage, context != nil {

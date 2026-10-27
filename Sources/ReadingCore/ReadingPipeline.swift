@@ -19,12 +19,12 @@ public enum ReadingPipeline {
             }
         }
         var words: [String: Lexeme] = [:], occurrences: [Occurrence] = []
-        for token in try tokenizer.tokenize(body) {
+        for token in try dictionary.readingTokens(tokenizer.tokenize(body)) {
             guard !token.surface.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { continue }
             var word = try dictionary.resolve(token)
             if let preference = preferences[token.surface], !preference.reading.isEmpty,
                JapaneseText.kana(preference.reading) == JapaneseText.kana(token.reading) { word = preference }
-            word.partOfSpeech = token.partOfSpeech
+            if !token.partOfSpeech.isEmpty { word.partOfSpeech = token.partOfSpeech }
             words[word.id] = word
             let example = JapaneseText.example(text: body, start: token.start, end: token.end)
             let lines = offsets.filter { $0.1 < token.end && $0.2 > token.start }
@@ -54,7 +54,7 @@ extension LibraryState {
         }
         for word in page.lexemes where !repaired.contains(where: { $0.lexemeID == word.id }) { lexemes[word.id] = word }
         captures[index].recognition = page.recognition
-        captures[index].processingVersion = "mlkit-8.0.0-layout-2-sudachi-0.6.10-jmdict-v1"
+        captures[index].processingVersion = "mlkit-8.0.0-local-cells-1-sudachi-0.6.10-jmdict-v1"
         let source = sessions.first { $0.id == captures[index].sessionID }?.source
         if let prior = captures.first(where: { other in
             other.id != captureID && other.status == .ready && sessions.first { $0.id == other.sessionID }?.source == source && PageIdentity.samePage(other.text, captures[index].text)

@@ -7,16 +7,83 @@ struct ContextStrip:UIViewRepresentable {
     var scores:[String:Double]
     @ObservedObject var page:PhotoPageCoordinator
     var annotations:[String:String]=[:]
+    var suggestions:[ParsingSuggestion]=[]
+    var suggestionAction:(ParsingSuggestion,Bool)->Void = {_,_ in}
     var disabled:Bool
     var action:(String,Occurrence)->Void
     func makeUIView(context:Context)->ContextStripView { ContextStripView() }
     func updateUIView(_ view:ContextStripView,context:Context) {
         view.page=page;view.action=action;view.isUserInteractionEnabled = !disabled
+        view.suggestionAction=suggestionAction;view.setSuggestions(suggestions)
         view.configure(text:text,items:occurrences,scores:scores,annotations:annotations)
     }
 }
-final class ContextStripView:UIView,UIGestureRecognizerDelegate,UIEditMenuInteractionDelegate {
+final class ContextStripView:UIView,UIGestureRecognizerDelegate,UIEditMenuInteractionDelegate,UIScrollViewDelegate {
+    private let suggestionInset:CGFloat=100
+    private var paneHeight:CGFloat { max(0,bounds.height-suggestionInset) }
     let scroll=UIScrollView(),content=UIView()
+    var suggestionAction:((ParsingSuggestion,Bool)->Void)?
+    private var suggestions:[ParsingSuggestion]=[]
+    private var suggestionButtons:[UIButton]=[]
+    private var showingSuggestions=false
+    private var lastDismiss=0
+    private var suggestionDrag:ParsingSuggestion?
+    private var suggestionOrigin=CGPoint.zero
+    func setSuggestions(_ values:[ParsingSuggestion]) {
+        guard values != suggestions else { return }
+        suggestions=values;showingSuggestions = !values.isEmpty
+        suggestionButtons.forEach{$0.removeFromSuperview()};suggestionButtons=[]
+        for (index,value) in values.enumerated() {
+            let button=UIButton(type:.system);button.tag=index
+            button.setTitle(value.surface,for:.normal);button.titleLabel?.font = .preferredFont(forTextStyle:.title2)
+            button.backgroundColor = .secondarySystemBackground;button.layer.borderColor=UIColor.systemBlue.cgColor;button.layer.borderWidth=2;button.layer.cornerRadius=6
+            button.accessibilityLabel="Suggested term \(value.surface). Tap to use these boundaries."
+            button.accessibilityIdentifier="parsing-suggestion-\(value.surface)"
+            button.addTarget(self,action:#selector(acceptSuggestion(_:)),for:.touchUpInside)
+            button.accessibilityCustomActions=[UIAccessibilityCustomAction(name:"Discard suggestion") { [weak self] _ in self?.suggestionAction?(value,false);return true }]
+            let hold=UILongPressGestureRecognizer(target:self,action:#selector(dragSuggestion(_:)));hold.minimumPressDuration=0.35;button.addGestureRecognizer(hold)
+            addSubview(button);suggestionButtons.append(button)
+        }
+        layoutSuggestions()
+    }
+    private func layoutSuggestions() {
+        var ends:[CGFloat]=[-10000,-10000]
+        for (i,value) in suggestions.enumerated() {
+            let button=suggestionButtons[i]
+            let a=boundsX.first{$0.0==value.start}?.1 ?? 0,b=boundsX.last{$0.0==value.end}?.1 ?? a+50
+            let x=a-scroll.contentOffset.x,width=max(44,b-a)
+            let lane=ends[0]<=x ? 0 : 1
+            button.frame=CGRect(x:x,y:suggestionInset-CGFloat(lane+1)*50,width:width,height:46);ends[lane]=x+width+4
+            button.isHidden = !showingSuggestions || page?.interaction != .browsing || x+width<0 || x>bounds.width
+        }
+    }
+    override func hitTest(_ point:CGPoint,with event:UIEvent?)->UIView? {
+        guard !isHidden,isUserInteractionEnabled else { return nil }
+        for button in suggestionButtons.reversed() where !button.isHidden && button.frame.contains(point) {
+            return button.hitTest(convert(point,to:button),with:event)
+        }
+        if point.y<suggestionInset { return nil }
+        return super.hitTest(point,with:event)
+    }
+    @objc private func acceptSuggestion(_ button:UIButton) {
+        guard suggestions.indices.contains(button.tag) else { return }
+        suggestionAction?(suggestions[button.tag],true)
+    }
+    @objc private func dragSuggestion(_ gesture:UILongPressGestureRecognizer) {
+        guard let button=gesture.view as? UIButton,suggestions.indices.contains(button.tag) else { return }
+        switch gesture.state {
+        case .began: suggestionDrag=suggestions[button.tag];suggestionOrigin=gesture.location(in:self);haptic.selectionChanged()
+        case .changed: button.alpha=gesture.location(in:self).y<suggestionOrigin.y-24 ? 0.35 : 1
+        case .ended:
+            if let value=suggestionDrag,gesture.location(in:self).y<suggestionOrigin.y-24 { suggestionAction?(value,false) }
+            suggestionDrag=nil;button.alpha=1
+        case .cancelled,.failed:suggestionDrag=nil;button.alpha=1
+        default:break
+        }
+    }
+    func scrollViewWillBeginDragging(_ scrollView:UIScrollView) { showingSuggestions=false;layoutSuggestions() }
+    func scrollViewDidScroll(_ scrollView:UIScrollView) { layoutSuggestions() }
+
     private let discard=UILabel(),selection=UIView(),left=ContextCursor(),right=ContextCursor()
     private var labels:[String:ContextTermLabel]=[:],badges:[String:UILabel]=[:],items:[Occurrence]=[],scores:[String:Double]=[:]
     private struct LayoutToken:Equatable {
@@ -38,7 +105,8 @@ final class ContextStripView:UIView,UIGestureRecognizerDelegate,UIEditMenuIntera
     var page:PhotoPageCoordinator!
     var action:((String,Occurrence)->Void)?
     override init(frame:CGRect) {
-        super.init(frame:frame);backgroundColor = .secondarySystemBackground
+        super.init(frame:frame);backgroundColor = .clear;scroll.backgroundColor = .secondarySystemBackground
+        scroll.delegate=self
         scroll.accessibilityIdentifier="context-strip";scroll.delaysContentTouches=false;scroll.showsHorizontalScrollIndicator=true
         addSubview(scroll);scroll.addSubview(content)
         selection.backgroundColor=UIColor.systemYellow.withAlphaComponent(0.2);selection.isUserInteractionEnabled=false;content.addSubview(selection)
@@ -57,7 +125,7 @@ final class ContextStripView:UIView,UIGestureRecognizerDelegate,UIEditMenuIntera
         editMenu=UIEditMenuInteraction(delegate:self);addInteraction(editMenu)
     }
     required init?(coder:NSCoder) { fatalError() }
-    override func layoutSubviews() { super.layoutSubviews();scroll.frame=bounds;discard.frame=CGRect(x:16,y:-52,width:max(44,bounds.width-32),height:48);layoutTokens() }
+    override func layoutSubviews() { super.layoutSubviews();scroll.frame=CGRect(x:0,y:suggestionInset,width:bounds.width,height:paneHeight);discard.frame=CGRect(x:16,y:suggestionInset-52,width:max(44,bounds.width-32),height:48);layoutTokens() }
     func configure(text:String,items:[Occurrence],scores:[String:Double],annotations:[String:String]) {
         self.text=text;self.items=items.sorted{$0.start<$1.start};self.scores=scores
         let ids=Set(items.map(\.id))
@@ -89,6 +157,8 @@ final class ContextStripView:UIView,UIGestureRecognizerDelegate,UIEditMenuIntera
             } }
         }
         layoutTokens()
+        if lastFocus != page.activeOccurrenceID || lastDismiss != page.suggestionDismissRequest { showingSuggestions=false;lastDismiss=page.suggestionDismissRequest }
+        layoutSuggestions()
         if lastFocus != page.activeOccurrenceID || lastScroll != page.scrollRequest {
             lastFocus=page.activeOccurrenceID;lastScroll=page.scrollRequest
             if let id=lastFocus,let label=labels[id],page.interaction != .dragging && page.interaction != .joining {
@@ -98,15 +168,15 @@ final class ContextStripView:UIView,UIGestureRecognizerDelegate,UIEditMenuIntera
     }
     private func layoutTokens() {
         let key=items.map{LayoutToken(id:$0.id,surface:$0.surface,start:$0.start,fontSize:labels[$0.id]?.font.pointSize ?? 0)}
-        guard key != layoutKey || bounds.size != layoutSize else { layoutSelection();return }
+        guard key != layoutKey || bounds.size != layoutSize else { layoutSelection();layoutSuggestions();return }
         layoutKey=key;layoutSize=bounds.size
         var x:CGFloat=10;boundsX=[]
         for item in items {
             guard let label=labels[item.id] else { continue }
             let font=label.font!,surface=label.text ?? ""
             let width=max(44,(surface as NSString).size(withAttributes:[.font:font]).width+16)
-            label.frame=CGRect(x:x,y:6,width:width,height:max(44,bounds.height-14))
-            badges[item.id]?.frame=CGRect(x:x+3,y:max(0,bounds.height-22),width:width-6,height:18)
+            label.frame=CGRect(x:x,y:6,width:width,height:max(44,paneHeight-14))
+            badges[item.id]?.frame=CGRect(x:x+3,y:max(0,paneHeight-22),width:width-6,height:18)
             var prefix="",offset=item.start
             boundsX.append((offset,x+8))
             for char in item.surface {
@@ -116,21 +186,22 @@ final class ContextStripView:UIView,UIGestureRecognizerDelegate,UIEditMenuIntera
             }
             x += width+4
         }
-        content.frame=CGRect(x:0,y:0,width:max(bounds.width,x+6),height:bounds.height);scroll.contentSize=content.bounds.size
-        layoutSelection()
+        content.frame=CGRect(x:0,y:0,width:max(bounds.width,x+6),height:paneHeight);scroll.contentSize=content.bounds.size
+        layoutSelection();layoutSuggestions()
     }
     private func layoutSelection() {
         guard let range=page?.joinRange else { left.isHidden=true;right.isHidden=true;selection.isHidden=true;return }
         left.isHidden=false;right.isHidden=false;selection.isHidden=false
         let a=boundsX.first{$0.0==range.lowerBound}?.1 ?? 0,b=boundsX.last{$0.0==range.upperBound}?.1 ?? 0
-        left.frame=CGRect(x:a-11,y:0,width:22,height:bounds.height);right.frame=CGRect(x:b-11,y:0,width:22,height:bounds.height)
-        selection.frame=CGRect(x:a,y:0,width:max(0,b-a),height:bounds.height)
+        left.frame=CGRect(x:a-11,y:0,width:22,height:paneHeight);right.frame=CGRect(x:b-11,y:0,width:22,height:paneHeight)
+        selection.frame=CGRect(x:a,y:0,width:max(0,b-a),height:paneHeight)
         content.bringSubviewToFront(selection);content.bringSubviewToFront(left);content.bringSubviewToFront(right)
     }
     private func hit(_ p:CGPoint)->Occurrence? { items.first{labels[$0.id]?.frame.contains(p)==true} }
     @objc private func tapped(_ gesture:UITapGestureRecognizer) {
         if page.interaction == .editing { page.onOutsideTap?();return }
         guard page.interaction != .joining,let item=hit(gesture.location(in:content)) else { return };page.rowTap(item)
+        showingSuggestions=suggestions.contains{$0.anchor>=item.start && $0.anchor<item.end};lastFocus=item.id;lastDismiss=page.suggestionDismissRequest;layoutSuggestions()
     }
     @objc private func moveCursor(_ gesture:UIPanGestureRecognizer) {
         guard var range=page.joinRange else { return }
@@ -168,7 +239,7 @@ final class ContextStripView:UIView,UIGestureRecognizerDelegate,UIEditMenuIntera
             if index==1,near.0>range.lowerBound { page.joinRange=range.lowerBound..<near.0 }
             layoutSelection()
         } else if let source {
-            let candidate=hit(CGPoint(x:finger.x+scroll.contentOffset.x,y:finger.y))
+            let candidate=hit(CGPoint(x:finger.x+scroll.contentOffset.x,y:finger.y-suggestionInset))
             target=candidate.flatMap{ParseGesture.neighbors(of:source.id,in:items).contains($0.id) ? $0 : nil}
         }
     }

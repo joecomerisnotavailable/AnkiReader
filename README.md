@@ -140,6 +140,31 @@ checkout; it creates a new project. Native dependencies, dictionaries, Pods, tes
 fixtures, and private page photos are ignored local build inputs. A fully automated
 clean-machine bootstrap is still needed.
 
+## Word grouping and optional parsing suggestions
+
+The reader-facing parse combines verb/adjective stems with grammatical endings
+(e.g. 食べて, 貼った, 食べていた). The tokenizer still supplies the underlying
+morphological analysis. A bounded longest dictionary-match pass then combines
+listed expressions across token boundaries (e.g. ひと + つ → ひとつ), before
+looking up their components individually. Membership queries are batched and
+never cross punctuation, whitespace, or missing text offsets. This grouping applies to new captures and local parsing
+suggestions; existing saved pages are not automatically reprocessed.
+
+The bundled JMdict index includes spelling-specific headwords and senses,
+respecting reading/spelling restrictions and prioritizing explicit spelling usage
+notes. Alternate spellings have separate lookup identities, while existing
+primary entry identities remain valid. Legacy dictionary indexes remain readable.
+Existing saved entries/retained cards are not bulk rewritten: Edit → Keep refreshes
+a saved occurrence's lookup, including when its spelling has not changed.
+
+After an edit, optional term-boundary suggestions float above the context strip.
+Tap to apply one (with Undo); tapping elsewhere or scrolling hides suggestions,
+and tapping the edited neighborhood restores them. Hold a suggestion and swipe
+up to dismiss it. Dismissals are saved with the page and included in backups.
+Suggestions use a bounded neighborhood of saved text, never another OCR pass.
+Photo alternatives dismiss the keyboard, change only the draft, and require Keep;
+tapping the text field brings the keyboard back. Cancel discards the draft.
+
 ## Editing performance checks
 
 Join/Shatter reuse character-cell fits for unchanged OCR anchors on the current
@@ -176,3 +201,70 @@ and distribution preparation remain before a sustained-use release. Public App
 Store submission is a separate action. No study scheduler, live Anki sync, account,
 server, translation, generated examples, manga support, or multi-device sync is
 included.
+
+## Column order, character alternatives, and pitch accent
+
+New OCR results are ordered using oriented column centerlines, not the left edge
+of axis-aligned boxes. For an existing page use Page actions → Repair column order.
+This permutes mapped text cells and occurrence offsets without rerunning OCR or
+rewriting frozen cards. Corrections and manual examples survive; Undo is available.
+Repair refuses a case where source mapping is missing or an existing term would
+be torn apart by moving its columns, rather than silently discarding the edit.
+
+Character alternatives now recognize tight individual-character crops. Select a
+character in the editor to target it; short terms may offer a one-character change
+within the term. Unrelated sentence output is rejected. These are OCR candidates,
+not an exhaustive visual-similarity dictionary or calibrated probabilities.
+
+Pitch graphs show dictionary-form accents from Uros O.'s Kanjium (CC BY-SA 4.0),
+matched by spelling and reading, with source usage labels and multiple variants.
+The hollow final dot represents a following particle. Inflected surface accents
+are not inferred from dictionary-form data. Missing matches are labeled unavailable.
+
+To reproduce the pitch index, download
+https://raw.githubusercontent.com/mifunetoshiro/kanjium/master/data/source_files/raw/accents.txt
+to `Resources/kanjium-accents.tsv`, then run `python3 Scripts/build_dictionary.py`
+(or `python3 Scripts/index_pitch.py` to add pitch data to an existing local index).
+The index records the source SHA-256 and attribution; the raw file is a local build
+input. `Resources/Attribution.txt` is displayed in Sources & licenses.
+
+## Pixel-guided local recognition refinement
+
+New captures reuse ML Kit's saved column quadrilaterals to measure ink spacing
+independently of the OCR character count. Long, coarse OCR elements with a count
+discrepancy or mixed Latin text receive short retries with the bundled Tesseract
+Japanese model. Crops are rectified, cut at observed whitespace, and recognized
+off the main thread. This avoids distributing an entire column's placement error
+uniformly across its characters.
+
+Reconciliation requires a unique source match, agreement with the measured cell
+count, and reliable image boundaries. It accepts unchanged text with finer anchors
+or up to two internal missing characters between matching anchors. Conflicting
+substitutions, deletions, ambiguous repeated text, and mixed Latin candidates are
+left unchanged. This is a conservative recovery stage, not a guarantee that every
+missing or extra character will be resolved. Fine character anchors still draw as
+continuous term highlights, including after Join and Shatter.
+
+Existing pages are not automatically reprocessed. On an unedited page, focus the
+word of interest and choose **Page actions → Refine printed text**. The focused
+crop is tried first. The action preserves selections and knowledge, keeps original
+OCR in `rawLines`, leaves retained cards/exports unchanged, and supports Undo.
+Pages with manual text, boundary, or example edits are excluded to protect that
+work. Saved-page refinement uses existing column locations, not a full-page OCR
+rerun. A result is discarded if the page changes while it is being prepared.
+
+Work is bounded to two suspect columns and twelve crops, with soft budgets of
+0.4 seconds for planning and 1.5 seconds for retries. Image decoding and an
+in-flight engine initialization/request may exceed those budgets; iPhone 13 Pro
+latency remains to be measured. The saved Oct 26 2:43 PM column recovered
+`注目を集めている` and corrected 注's location in a targeted local test. On this
+Mac, its pixel profile took about 37 ms and the five crop retries/placement fits
+took about 1.06 seconds in Debug. These are not end-to-end phone measurements or
+an OCR-engine benchmark.
+
+`RecognitionRefinementTests` covers geometry, conservative matching, and repeated
+refinement. `RefinedCaptureTests` covers state preservation and archive roundtrips.
+Set `REFINEMENT_CAPTURE` to the local diagnostic folder to include the saved pixel
+profile; OCR only runs if `REFINEMENT_TESSERACT` is explicitly supplied too.
+`Scripts/placement/column_profile.swift` independently plots the rectified ink
+profile without invoking recognition.

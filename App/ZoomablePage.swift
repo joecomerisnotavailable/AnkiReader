@@ -5,6 +5,7 @@ import Combine
 enum PageInteraction { case browsing,dragging,joining,editing }
 
 @MainActor final class PhotoPageCoordinator: ObservableObject {
+    @Published var suggestionDismissRequest=0
     @Published var interaction=PageInteraction.browsing
     @Published var editorOccurrence:Occurrence?
     @Published var joinRange:Range<Int>?
@@ -33,6 +34,7 @@ enum PageInteraction { case browsing,dragging,joining,editing }
     var onMerge:((String,String)->Void)?
     var onInvalidDrop:((String,String?)->Void)?
     func photoTap(_ occurrence:Occurrence) {
+        suggestionDismissRequest += 1
         activeOccurrenceID=occurrence.id; scrollWordID=occurrence.lexemeID; scrollRequest += 1
     }
     func rowTap(_ occurrence:Occurrence) { photoTap(occurrence);wordsOnly=false;revealRequest += 1 }
@@ -157,7 +159,7 @@ final class PhotoScrollView: UIView, UIScrollViewDelegate, UIGestureRecognizerDe
         let version=alignmentVersion, input=rawRegions, cached=raster, cachedFits=inkCache, image=photograph.image?.cgImage
         alignmentTask=Task { [weak self] in
             let result=await Task.detached(priority:.userInitiated) { () -> (PageRaster?,[TermRegion],InkGeometryCache) in
-                let raster=cached ?? image.flatMap(PhotoRaster.make)
+                let raster=cached ?? image.flatMap { PhotoRaster.make($0) }
                 var cache=cachedFits
                 return (raster,raster.map{InkGeometry.refine(input,raster:$0,cache:&cache)} ?? input,cache)
             }.value
@@ -252,7 +254,7 @@ final class PhotoScrollView: UIView, UIScrollViewDelegate, UIGestureRecognizerDe
                 return hypot(x.midX-point.x,x.midY-point.y)<hypot(y.midX-point.x,y.midY-point.y)
             }?.occurrenceID
     }
-    @objc private func tapped(_ recognizer:UITapGestureRecognizer) { if page.interaction == .editing { page.onOutsideTap?();return };if let id=hit(recognizer.location(in:canvas)) { page.onTap?(id) } }
+    @objc private func tapped(_ recognizer:UITapGestureRecognizer) { page.suggestionDismissRequest += 1;if page.interaction == .editing { page.onOutsideTap?();return };if let id=hit(recognizer.location(in:canvas)) { page.onTap?(id) } }
     @objc private func doubleTapped(_ recognizer:UITapGestureRecognizer) {
         cancelDrag()
         if scroll.zoomScale>fit*1.1 { scroll.setZoomScale(fit,animated:true) }
@@ -364,8 +366,8 @@ private final class GridGlyphView:UIView {
 }
 
 enum PhotoRaster {
-    static func make(_ image:CGImage)->PageRaster? {
-        let scale=min(1,2048/Double(max(image.width,image.height)))
+    static func make(_ image:CGImage,maximumDimension:Int=2048)->PageRaster? {
+        let scale=min(1,Double(maximumDimension)/Double(max(image.width,image.height)))
         let width=max(1,Int(Double(image.width)*scale)),height=max(1,Int(Double(image.height)*scale))
         var pixels=[UInt8](repeating:255,count:width*height)
         let drawn=pixels.withUnsafeMutableBytes { bytes -> Bool in

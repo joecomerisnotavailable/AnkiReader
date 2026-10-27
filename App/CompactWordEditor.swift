@@ -86,32 +86,37 @@ struct CompactWordEditor:View {
             HStack(alignment:.center) {
                 CompactTextField(text:$draft,selection:$selection,method:$method,bridge:bridge).frame(height:62)
                 Button { invalidate();bridge.draw() } label:{Image(systemName:"pencil.tip.crop.circle").font(.title2)}.accessibilityLabel("Draw character")
-                Button { alternatives() } label:{Image(systemName:"text.viewfinder").font(.title2)}.accessibilityLabel("Photo alternatives").disabled(loading || draft != occurrence.surface)
+                Button { alternatives() } label:{Image(systemName:"text.viewfinder").font(.title2)}.accessibilityLabel("Character alternatives").disabled(loading || draft != occurrence.surface)
             }.disabled(model.editingParse)
             if loading { HStack { ProgressView();Button("Cancel lookup"){invalidate()} } }
             if !candidates.isEmpty {
-                ScrollView(.horizontal) { HStack { ForEach(candidates) { item in
-                    if let value=item.replacement { Button(value){
-                        if let range=Range(candidateRange,in:draft) { draft.replaceSubrange(range,with:value);method = .photo;invalidate() }
-                    }.font(.title2).buttonStyle(.bordered) }
-                    else { Text(item.text).textSelection(.enabled).font(.callout) }
-                } } }
+                ScrollView(.horizontal) { HStack { ForEach(candidates.filter{$0.replacement != nil}) { item in
+                    Button {
+                        if let value=item.replacement,let inserted=DraftInsertion.apply(value,to:draft,selection:candidateRange) {
+                            draft=inserted.text;selection=inserted.cursor
+                        }
+                        method = .photo;invalidate()
+                    } label: {
+                        VStack { Text(item.replacement ?? item.text).font(.title2)
+                        }
+                    }.buttonStyle(.bordered).accessibilityIdentifier("alternative-"+(item.replacement ?? item.text))
+                } }.frame(minHeight:52,maxHeight:80) }
             }
             if !message.isEmpty { Text(message).font(.caption) }
             if let error=model.error { Text(error).font(.caption).foregroundStyle(.red) }
         }.padding(.horizontal,12).padding(.bottom,8).background(.regularMaterial,in:UnevenRoundedRectangle(topLeadingRadius:16,topTrailingRadius:16))
-            .onChange(of:draft){_,_ in invalidate()}.onChange(of:selection){_,_ in if loading || !candidates.isEmpty {invalidate()} }
+            .onChange(of:draft){_,_ in invalidate()}.onChange(of:selection){_,_ in if bridge.field?.isFirstResponder == true && (loading || !candidates.isEmpty) {invalidate()} }
             .onDisappear { invalidate();bridge.close() }
     }
     private func invalidate() { generation=UUID();task?.cancel();loading=false;candidates=[] }
     private func cancel() { guard !model.editingParse else { return };bridge.close();invalidate();close() }
     private func keep() {
-        if draft==occurrence.surface { cancel();return }
         invalidate();bridge.close()
         Task { if await model.editPage(occurrence.captureID,command:.replace(occurrence.id,draft,method)) { saved() } }
     }
     private func alternatives() {
         guard let page=model.state.captures.first(where:{$0.id==occurrence.captureID}) else { return }
+        bridge.close()
         invalidate();message="";loading=true
         candidateRange=selection.length>0 ? selection : NSRange(location:0,length:draft.utf16.count)
         guard let r=Range(candidateRange,in:draft) else { loading=false;return }
@@ -122,8 +127,7 @@ struct CompactWordEditor:View {
                 let values=try await PhotoCorrectionService.shared.candidates(page:page,target:target,all:all,url:url)
                 guard token==generation,!Task.isCancelled else { return }
                 candidates=values;loading=false
-                if values.isEmpty { message="No alternatives found. Type or draw a correction." }
-                else if values.contains(where:{$0.replacement==nil}) { message="Uncertain crop text can be copied; it will not replace neighboring characters." }
+                if values.isEmpty { message="No different character candidates found. Select a character to retry, or type/draw it." }
             } catch { if token==generation { loading=false;message=error.localizedDescription } }
         }
     }

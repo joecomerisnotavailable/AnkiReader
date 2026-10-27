@@ -14,3 +14,8 @@ https://github.com/tesseract-ocr/tessdata_best
 https://github.com/SwiftyTesseract/SwiftyTesseract
 
 Google ML Kit: https://developers.google.com/ml-kit/terms
+
+Pitch accent data: Uros O., Kanjium. Licensed under CC BY-SA 4.0.
+https://github.com/mifunetoshiro/kanjium
+https://creativecommons.org/licenses/by-sa/4.0/
+Indexed from data/source_files/raw/accents.txt; variants and usage labels preserved.

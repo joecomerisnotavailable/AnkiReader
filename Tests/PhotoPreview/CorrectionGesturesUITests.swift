@@ -69,3 +69,61 @@ final class CorrectionGesturesUITests:XCTestCase {
         app.buttons["Cancel"].tap()
     }
 }
+
+extension CorrectionGesturesUITests {
+    func testAlternativesHideKeyboardAndRemainDraftUntilKeep() {
+        let app=launch(["--alternatives-fixture"]);menu(app,0,"Edit")
+        let field=app.textViews["compact-edit-text"]
+        XCTAssertTrue(field.waitForExistence(timeout:5))
+        app.buttons["Character alternatives"].tap()
+        let candidate=app.buttons["alternative-なだめる"]
+        XCTAssertTrue(candidate.waitForExistence(timeout:5))
+        XCTAssertFalse(app.keyboards.firstMatch.exists)
+        candidate.tap();XCTAssertEqual(field.value as? String,"なだめる")
+        app.buttons["Cancel"].tap();menu(app,0,"Edit")
+        XCTAssertEqual(field.value as? String,"なだ")
+        app.buttons["Character alternatives"].tap();XCTAssertTrue(candidate.waitForExistence(timeout:5));candidate.tap()
+        field.tap();XCTAssertTrue(app.keyboards.firstMatch.waitForExistence(timeout:5))
+        app.buttons["Keep"].tap()
+        expectation(for:NSPredicate(format:"label == %@","なだめる"),evaluatedWith:app.buttons["context-0"]);waitForExpectations(timeout:10)
+    }
+    func testParsingSuggestionHideRecallAndDiscard() {
+        let app=launch()
+        let ni=app.buttons["context-2"]
+        ni.coordinate(withNormalizedOffset:CGVector(dx:0.5,dy:0.5)).press(forDuration:0.5,thenDragTo:ni.coordinate(withNormalizedOffset:CGVector(dx:0.5,dy:-0.35)))
+        let suggestion=app.buttons["parsing-suggestion-なだめる"]
+        XCTAssertTrue(suggestion.waitForExistence(timeout:10))
+        app.buttons["context-0"].tap()
+        XCTAssertFalse(suggestion.isHittable)
+        app.buttons["context-2"].tap()
+        XCTAssertTrue(suggestion.waitForExistence(timeout:5));XCTAssertTrue(suggestion.isHittable)
+        suggestion.coordinate(withNormalizedOffset:CGVector(dx:0.5,dy:0.5)).press(forDuration:0.5,thenDragTo:suggestion.coordinate(withNormalizedOffset:CGVector(dx:0.5,dy:-0.5)))
+        XCTAssertFalse(suggestion.waitForExistence(timeout:1))
+        app.buttons["context-0"].tap();app.buttons["context-2"].tap()
+        XCTAssertFalse(suggestion.exists)
+        XCTAssertEqual(app.buttons["context-0"].label,"なだ")
+        app.buttons["Undo"].tap()
+        expectation(for:NSPredicate(format:"label == %@","に"),evaluatedWith:app.buttons["context-2"]);waitForExpectations(timeout:10)
+    }
+    func testParsingSuggestionAcceptAndUndo() {
+        let app=launch()
+        let ni=app.buttons["context-2"]
+        ni.coordinate(withNormalizedOffset:CGVector(dx:0.5,dy:0.5)).press(forDuration:0.5,thenDragTo:ni.coordinate(withNormalizedOffset:CGVector(dx:0.5,dy:-0.35)))
+        let suggestion=app.buttons["parsing-suggestion-なだめる"]
+        XCTAssertTrue(suggestion.waitForExistence(timeout:10));XCTAssertTrue(suggestion.isHittable)
+        XCTAssertEqual(app.buttons["context-0"].label,"なだ")
+        suggestion.tap()
+        expectation(for:NSPredicate(format:"label == %@","なだめる"),evaluatedWith:app.buttons["context-0"]);waitForExpectations(timeout:10)
+        app.buttons["Undo"].tap()
+        expectation(for:NSPredicate(format:"label == %@","なだ"),evaluatedWith:app.buttons["context-0"]);waitForExpectations(timeout:10)
+    }
+}
+
+extension CorrectionGesturesUITests {
+    func testPitchGraphAppearsWithBundledAccent() {
+        let app=launch(["--pitch-fixture"])
+        let graph=app.descendants(matching:.any).matching(identifier:"pitch-accent-graphs").firstMatch
+        XCTAssertTrue(graph.waitForExistence(timeout:10))
+        XCTAssertTrue(app.descendants(matching:.any).matching(NSPredicate(format:"label CONTAINS %@","pitch drops after mora 2")).firstMatch.waitForExistence(timeout:5),app.debugDescription)
+    }
+}

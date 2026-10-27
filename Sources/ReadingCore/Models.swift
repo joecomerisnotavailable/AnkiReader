@@ -51,6 +51,7 @@ public struct PageCapture: Codable, Identifiable, Sendable {
     public var reviewCompleted: Bool?
     public var excludedLexemeIDs: Set<String>?
     public var reviewMarks: [String:ReviewMark]?
+    public var dismissedParsingSuggestions: Set<String>?
     public var error: String?
     public var text: String { correctedText ?? recognition?.text ?? "" }
     public init(sessionID: String, imagePath: String, fingerprint: String) { self.sessionID=sessionID; self.imagePath=imagePath; self.fingerprint=fingerprint }

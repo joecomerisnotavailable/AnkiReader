@@ -29,12 +29,80 @@ public enum JapaneseText {
 public struct MorphToken: Codable, Sendable {
     public var surface:String; public var lemma:String; public var reading:String; public var partOfSpeech:String; public var start:Int; public var end:Int; public var unknown:Bool
 }
+/// Morphological tokens are implementation details; the reader sees inflected words.
+public enum ReadingWords {
+    public static func isHead(_ token:MorphToken)->Bool {
+        !token.unknown && ["動詞","形容詞"].contains(token.partOfSpeech.components(separatedBy:",").first ?? "")
+    }
+    public static func isEnding(_ token:MorphToken)->Bool {
+        let pos=token.partOfSpeech.components(separatedBy:",")
+        return !token.unknown && (pos.first=="助動詞" || (pos.starts(with:["助詞","接続助詞"]) && ["て","で"].contains(token.surface)))
+    }
+    public static func grouped(_ tokens:[MorphToken])->[MorphToken] {
+        var result:[MorphToken]=[],i=0
+        while i<tokens.count {
+            var word=tokens[i];i+=1
+            if isHead(word) {
+                while i<tokens.count, tokens[i].start==word.end {
+                    let next=tokens[i]
+                    let attachedHelper = (word.surface.hasSuffix("て") || word.surface.hasSuffix("で")) &&
+                        next.partOfSpeech.hasPrefix("動詞,非自立可能") && !next.unknown &&
+                        ["いる","居る","おる","ある","有る","しまう","仕舞う","おく","置く","みる","見る","くる","来る","いく","行く"].contains(next.lemma)
+                    guard isEnding(next) || attachedHelper else { break }
+                    word.surface += next.surface;word.end=next.end;i+=1
+                }
+            }
+            result.append(word)
+        }
+        return result
+    }
+}
 public protocol MorphologicalAnalyzer { func tokenize(_ text:String) throws -> [MorphToken] }
 public final class DictionaryIndex {
     private let db:Database
-    public init(url:URL) throws { db=try Database(url:url,readOnly:true) }
+    private let spellingDetails:Bool
+    public init(url:URL) throws {
+        db=try Database(url:url,readOnly:true)
+        spellingDetails = !(try db.rows("SELECT name FROM sqlite_master WHERE type='table' AND name='form_details'")).isEmpty
+    }
+    /// Bounded longest dictionary match over tokenizer boundaries. Batch membership
+    /// queries keep this inexpensive; only chosen words need full sense lookups.
+    public func readingTokens(_ raw:[MorphToken]) throws -> [MorphToken] {
+        let tokens=ReadingWords.grouped(raw)
+        var candidates:[Int:[(Int,String)]]=[:],forms=Set<String>()
+        for i in tokens.indices {
+            var text=""
+            for j in i..<min(tokens.count,i+8) {
+                let token=tokens[j]
+                guard (j==i || tokens[j-1].end==token.start),
+                      !token.surface.unicodeScalars.contains(where:{CharacterSet.whitespacesAndNewlines.contains($0) || CharacterSet.punctuationCharacters.contains($0)}) else { break }
+                text += token.surface
+                guard text.count<=32 else { break }
+                if j>i { candidates[i,default:[]].append((j+1,text));forms.insert(text) }
+            }
+        }
+        var matches=Set<String>()
+        let values=Array(forms).sorted()
+        for start in stride(from:0,to:values.count,by:400) {
+            let batch=Array(values[start..<min(values.count,start+400)])
+            let placeholders=Array(repeating:"?",count:batch.count).joined(separator:",")
+            let rows=try db.rows("SELECT DISTINCT form FROM forms WHERE form IN (\(placeholders))",values:batch)
+            matches.formUnion(rows.compactMap{ $0.first })
+        }
+        var result:[MorphToken]=[],i=0
+        while i<tokens.count {
+            if let (end,text)=candidates[i]?.last(where:{matches.contains($0.1)}) {
+                // Resolve this spelling as a whole, rather than first converting
+                // constituent kana (e.g. ひと) into a different dictionary headword.
+                result.append(MorphToken(surface:text,lemma:text,reading:tokens[i..<end].map(\.reading).joined(),partOfSpeech:"",start:tokens[i].start,end:tokens[end-1].end,unknown:false))
+                i=end
+            } else { result.append(tokens[i]);i+=1 }
+        }
+        return result
+    }
     public func lookup(_ expression:String,reading:String? = nil, strictReading:Bool = false) throws -> [Lexeme] {
-        let rows=try db.rows("SELECT DISTINCT e.id,e.expression,e.reading,e.definitions,e.commonness,e.pos FROM entries e JOIN forms f ON f.entry_id=e.id WHERE f.form=? LIMIT 40",values:[expression])
+        let sql = spellingDetails ? "SELECT DISTINCT CASE WHEN d.expression=e.expression THEN e.id ELSE e.id || '@' || d.expression END,d.expression,e.reading,d.definitions,e.commonness,d.pos FROM entries e JOIN form_details d ON d.entry_id=e.id WHERE d.form=? LIMIT 40" : "SELECT DISTINCT e.id,e.expression,e.reading,e.definitions,e.commonness,e.pos FROM entries e JOIN forms f ON f.entry_id=e.id WHERE f.form=? LIMIT 40"
+        let rows=try db.rows(sql,values:[expression])
         let items=rows.compactMap { r -> Lexeme? in
             guard r.count==6 else { return nil }
             return Lexeme(id:r[0],expression:r[1],reading:r[2],definitions:(try? JSONDecoder().decode([String].self,from:Data(r[3].utf8))) ?? [],commonness:Double(r[4]) ?? 0.2,partOfSpeech:r[5],dictionaryID:r[0].components(separatedBy:":").first)
@@ -47,7 +115,7 @@ public final class DictionaryIndex {
     /// Sudachi separates inflectional endings (貼っ + て); these still name one lexeme.
     public func resolveExpression(_ text:String,tokenizer:MorphologicalAnalyzer) throws -> Lexeme {
         if let exact=try lookup(text).first { return exact }
-        let tokens=try tokenizer.tokenize(text)
+        let tokens=ReadingWords.grouped(try tokenizer.tokenize(text))
         if tokens.count==1 { return try resolve(tokens[0]) }
         if let head=tokens.first, !head.unknown,
            ["動詞","形容詞"].contains(head.partOfSpeech.components(separatedBy:",").first ?? ""),
@@ -71,7 +139,7 @@ public final class DictionaryIndex {
     public func resolve(_ token:MorphToken) throws -> Lexeme {
         let candidates=try lookup(token.lemma,reading:token.reading)
         if var first=candidates.first {
-            first.uncertain = candidates.count > 1 || (!token.reading.isEmpty && JapaneseText.kana(first.reading) != JapaneseText.kana(token.reading))
+            first.uncertain = candidates.count > 1 || (token.surface==token.lemma && !token.reading.isEmpty && JapaneseText.kana(first.reading) != JapaneseText.kana(token.reading))
             return first
         }
         let surfaceCandidates = try lookup(token.surface,reading:token.reading)

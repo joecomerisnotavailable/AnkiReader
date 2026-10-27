@@ -12,3 +12,7 @@ Vendor/
 *.xcuserstate
 xcuserdata/
 .DS_Store
+
+Resources/kanjium-accents.tsv
+
+__pycache__/

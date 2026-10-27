@@ -66,6 +66,18 @@ public enum CorrectionMapping {
         }
         return (result,history)
     }
+    public static func sourceRuns(_ page:PageCapture,start:Int,end:Int)->[SourceSpan] {
+        let map=cells(page)
+        guard start>=0,end>start,end<=map.count else { return [] }
+        let spans=Array(map[start..<end]).sorted{$0.start<$1.start}
+        guard spans.allSatisfy({$0.start>=0 && $0.end>$0.start}) else { return [] }
+        var result:[SourceSpan]=[]
+        for span in spans {
+            if let last=result.last,last.end>=span.start { result[result.count-1].end=max(last.end,span.end) }
+            else { result.append(span) }
+        }
+        return result
+    }
     public static func source(_ page:PageCapture,start:Int,end:Int)->SourceSpan? {
         let map=cells(page)
         guard start>=0,end>start,end<=map.count else { return nil }

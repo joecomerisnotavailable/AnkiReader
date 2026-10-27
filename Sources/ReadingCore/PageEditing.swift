@@ -82,3 +82,24 @@ public enum DraftInsertion {
         return (result,NSRange(location:selection.location+replacement.utf16.count,length:0))
     }
 }
+
+/// A proposed boundary, not a committed change to page text or review decisions.
+public struct ParsingSuggestion:Equatable,Identifiable,Sendable {
+    public var start:Int
+    public var end:Int
+    public var surface:String
+    public var revision:Int
+    public var anchor:Int
+    public var id:String { "\(start):\(end):\(surface)" }
+    public init(start:Int,end:Int,surface:String,revision:Int,anchor:Int) {
+        self.start=start;self.end=end;self.surface=surface;self.revision=revision;self.anchor=anchor
+    }
+    public static func changedTerms(_ proposed:[Occurrence],page:PageCapture,current:[Occurrence],anchor:Int)->[ParsingSuggestion] {
+        proposed.filter { candidate in
+            !candidate.surface.trimmingCharacters(in:.whitespacesAndNewlines).isEmpty &&
+            !current.contains{$0.start==candidate.start && $0.end==candidate.end} &&
+            !candidate.surface.unicodeScalars.contains{ "。！？!?".unicodeScalars.contains($0) }
+        }.map{ParsingSuggestion(start:$0.start,end:$0.end,surface:$0.surface,revision:page.textRevision ?? 0,anchor:anchor)}
+        .filter{!(page.dismissedParsingSuggestions?.contains($0.id) ?? false)}
+    }
+}

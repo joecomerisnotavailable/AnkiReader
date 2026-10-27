@@ -11,7 +11,10 @@ public struct TextElementGeometry: Codable, Hashable, Sendable {
     public var start: Int
     public var end: Int
     public var corners: [ImagePoint]
-    public init(text: String, start: Int, end: Int, corners: [ImagePoint]) { self.text=text; self.start=start; self.end=end; self.corners=corners }
+    public var estimated: Bool?
+    /// The two endpoint gaps of an independently fitted character cell.
+    public var refinedGaps: [Bool]?
+    public init(text: String, start: Int, end: Int, corners: [ImagePoint], estimated: Bool? = nil, refinedGaps:[Bool]? = nil) { self.text=text; self.start=start; self.end=end; self.corners=corners; self.estimated=estimated; self.refinedGaps=refinedGaps }
 }
 public struct CharacterAnchor: Hashable, Sendable {
     public var corners: [ImagePoint]
@@ -30,6 +33,7 @@ public struct TermRegion: Identifiable, Hashable, Sendable {
     public var characterEnd: Int = 0
     public var leadingGap: Bool?
     public var trailingGap: Bool?
+    public var imageAligned: Bool = false
 }
 public enum TermGeometry {
     /// SDK corner order can follow text rotation. Normalize to physical page
@@ -66,15 +70,17 @@ public enum TermGeometry {
         }
         var result: [TermRegion] = []
         for occurrence in occurrences {
-            var start=occurrence.start, end=occurrence.end
+            var spans=[SourceSpan(occurrence.start,occurrence.end)]
             if page.sourceMap != nil {
-                guard let source=CorrectionMapping.source(page,start:start,end:end) else { continue }
-                start=source.start;end=source.end
+                spans=CorrectionMapping.sourceRuns(page,start:occurrence.start,end:occurrence.end)
             } else if page.text != original {
-                let anchor = JapaneseText.slice(page.text,start,end)
-                guard !anchor.isEmpty, let range=original.range(of:anchor), original[range.upperBound...].range(of:anchor)==nil else { continue }
-                start=original[..<range.lowerBound].unicodeScalars.count; end=start+anchor.unicodeScalars.count
+                let anchor=JapaneseText.slice(page.text,occurrence.start,occurrence.end)
+                guard !anchor.isEmpty,let range=original.range(of:anchor),original[range.upperBound...].range(of:anchor)==nil else { continue }
+                let start=original[..<range.lowerBound].unicodeScalars.count
+                spans=[SourceSpan(start,start+anchor.unicodeScalars.count)]
             }
+            for span in spans {
+            let start=span.start,end=span.end
             for (line,a,b) in lines where start < b && end > a {
                 let localStart=max(start,a)-a, localEnd=min(end,b)-a
                 let elements=(line.elements ?? []).filter { $0.start < localEnd && $0.end > localStart && $0.corners.count == 4 }
@@ -83,9 +89,14 @@ public enum TermGeometry {
                     let lo=max(localStart,element.start), hi=min(localEnd,element.end)
                     guard hi>lo else { continue }
                     covered.formUnion(lo..<hi)
-                    let partial=lo != element.start || hi != element.end || end-start != occurrence.end-occurrence.start
+                    let partial=element.estimated == true || lo != element.start || hi != element.end || end-start != occurrence.end-occurrence.start
                     let quad=slice(element.corners, from:fraction(line.text,from:element.start,to:lo,totalEnd:element.end), to:fraction(line.text,from:element.start,to:hi,totalEnd:element.end), vertical:vertical)
-                    result.append(TermRegion(id:"\(occurrence.id):\(a+lo):\(a+hi)",occurrenceID:occurrence.id,corners:quad,estimated:partial,vertical:vertical,characterCount:max(1,JapaneseText.slice(line.text,lo,hi).count),anchor:CharacterAnchor(corners:pageCorners(element.corners),text:JapaneseText.slice(line.text,element.start,element.end),vertical:vertical),characterStart:JapaneseText.slice(line.text,element.start,lo).count,characterEnd:JapaneseText.slice(line.text,element.start,hi).count))
+                    var region=TermRegion(id:"\(occurrence.id):\(a+lo):\(a+hi)",occurrenceID:occurrence.id,corners:quad,estimated:partial,vertical:vertical,characterCount:max(1,JapaneseText.slice(line.text,lo,hi).count),anchor:CharacterAnchor(corners:pageCorners(element.corners),text:JapaneseText.slice(line.text,element.start,element.end),vertical:vertical),characterStart:JapaneseText.slice(line.text,element.start,lo).count,characterEnd:JapaneseText.slice(line.text,element.start,hi).count)
+                    if let gaps=element.refinedGaps,gaps.count==2 {
+                        region.imageAligned=true;region.anchor=nil
+                        region.leadingGap=gaps[0];region.trailingGap=gaps[1]
+                    }
+                    result.append(region)
                 }
                 // Older captures, or text not covered by SDK elements, use a clearly estimated line slice.
                 var position=localStart
@@ -97,8 +108,31 @@ public enum TermGeometry {
                     result.append(TermRegion(id:"\(occurrence.id):fallback:\(a+lo)",occurrenceID:occurrence.id,corners:quad,estimated:true,vertical:vertical,characterCount:max(1,JapaneseText.slice(line.text,lo,position).count),anchor:CharacterAnchor(corners:pageCorners(line.corners?.count == 4 ? line.corners! : rectangle(line.region)),text:line.text,vertical:vertical),characterStart:JapaneseText.slice(line.text,0,lo).count,characterEnd:JapaneseText.slice(line.text,0,position).count))
                 }
             }
+            }
         }
-        return result
+        // Fine OCR anchors are per character; the UI remains segmented by term.
+        // Coalesce touching cells, allowing a small fitting discrepancy where
+        // independent crops meet, never across a physical column break.
+        var joined=[TermRegion]()
+        for region in result {
+            if var last=joined.last,last.imageAligned,region.imageAligned,last.occurrenceID==region.occurrenceID,last.vertical==region.vertical {
+                let a=last.corners,b=region.corners
+                func pitch(_ r:TermRegion)->Double {
+                    let q=r.corners,end=q[r.vertical ? 3 : 1]
+                    return hypot(q[0].x-end.x,q[0].y-end.y)/Double(max(1,r.characterCount))
+                }
+                let tolerance=max(0.000001,min(pitch(last),pitch(region))*0.1)
+                func near(_ p:ImagePoint,_ q:ImagePoint)->Bool {hypot(p.x-q.x,p.y-q.y)<tolerance}
+                let adjacent=last.vertical ? near(a[3],b[0]) && near(a[2],b[1]) : near(a[1],b[0]) && near(a[2],b[3])
+                if adjacent {
+                    last.corners=last.vertical ? [a[0],a[1],b[2],b[3]] : [a[0],b[1],b[2],a[3]]
+                    last.id += ":"+region.id;last.characterCount += region.characterCount;last.trailingGap=region.trailingGap
+                    joined[joined.count-1]=last;continue
+                }
+            }
+            joined.append(region)
+        }
+        return joined
     }
     private static func fraction(_ text:String,from:Int,to:Int,totalEnd:Int)->Double {
         let count=JapaneseText.slice(text,from,totalEnd).count

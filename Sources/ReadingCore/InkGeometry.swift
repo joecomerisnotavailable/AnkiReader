@@ -37,6 +37,7 @@ public enum InkGeometry {
         }
         let fits=cache.fits
         return regions.map { original in
+            if original.imageAligned { return original }
             if let anchor=original.anchor, let fit=fits[anchor], original.characterEnd<fit.boundaries.count {
                 var result=original
                 result.corners=TermGeometry.slice(anchor.corners,from:fit.boundaries[original.characterStart],to:fit.boundaries[original.characterEnd],vertical:original.vertical)

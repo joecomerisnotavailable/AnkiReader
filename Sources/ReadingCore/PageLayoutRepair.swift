@@ -35,17 +35,32 @@ public enum PageLayoutRepair {
                 return other.region.height >= median*0.85 && abs(line.region.y+line.region.height-other.region.y) < median*0.65 && line.region.x >= other.region.x-0.01 && line.region.x+line.region.width <= other.region.x+other.region.width+0.01
             }
         }
-        // Build explicit column/row clusters; a pairwise tolerance comparator is not transitive.
-        let primary = result.sorted { vertical ? $0.region.x > $1.region.x : $0.region.y < $1.region.y }
-        var groups: [[TextLine]] = []
-        for line in primary {
-            let center = vertical ? line.region.x+line.region.width/2 : line.region.y+line.region.height/2
-            if let index = groups.firstIndex(where: { group in
-                let anchor = group[0].region
-                let other = vertical ? anchor.x+anchor.width/2 : anchor.y+anchor.height/2
-                return abs(center-other) <= max(median*0.55, 0.002)
-            }) { groups[index].append(line) } else { groups.append([line]) }
+        return readingOrder(result,vertical:vertical)
+    }
+    /// Compare column centerlines at the same page height. Axis-aligned boxes
+    /// grow wider with skew and must not determine column membership or order.
+    public static func readingOrder(_ lines:[TextLine],vertical:Bool)->[TextLine] {
+        struct Axis { var line:TextLine;var across:Double;var along:Double;var thickness:Double }
+        let reference=0.5
+        let axes=lines.map { line -> Axis in
+            let q=TermGeometry.pageCorners(line.corners ?? TermGeometry.rectangle(line.region))
+            let a=vertical ? ImagePoint(x:(q[0].x+q[1].x)/2,y:(q[0].y+q[1].y)/2) : ImagePoint(x:(q[0].x+q[3].x)/2,y:(q[0].y+q[3].y)/2)
+            let b=vertical ? ImagePoint(x:(q[2].x+q[3].x)/2,y:(q[2].y+q[3].y)/2) : ImagePoint(x:(q[1].x+q[2].x)/2,y:(q[1].y+q[2].y)/2)
+            let along=vertical ? a.y : a.x, finish=vertical ? b.y : b.x
+            let cross=vertical ? a.x : a.y, last=vertical ? b.x : b.y
+            let slope=(last-cross)/max(0.00001,finish-along)
+            let projected=cross+(reference-along)*max(-0.5,min(0.5,slope))
+            let thickness=vertical ? (abs(q[1].x-q[0].x)+abs(q[2].x-q[3].x))/2 : (abs(q[3].y-q[0].y)+abs(q[2].y-q[1].y))/2
+            return Axis(line:line,across:projected,along:along,thickness:thickness)
         }
-        return groups.flatMap { group in group.sorted { vertical ? $0.region.y < $1.region.y : $0.region.x < $1.region.x } }
+        let sizes=axes.filter{!$0.line.isRuby}.map(\.thickness).sorted()
+        let median=sizes.isEmpty ? 0.02 : sizes[sizes.count/2]
+        let primary=axes.sorted { vertical ? $0.across>$1.across : $0.across<$1.across }
+        var groups:[[Axis]]=[]
+        for item in primary {
+            if let i=groups.firstIndex(where:{abs($0[0].across-item.across)<max(0.002,median*0.45)}) { groups[i].append(item) }
+            else { groups.append([item]) }
+        }
+        return groups.flatMap{$0.sorted{$0.along<$1.along}.map(\.line)}
     }
 }

@@ -78,6 +78,10 @@ private struct SavedPage:Decodable { var recognition:Recognition; var vocabulary
                 let proposal=CorrectionPreview(pageID:page.id,revision:0,originalPage:page,originalText:page.text,originalOccurrences:original,start:0,end:2,replacement:"なだ",method:.typing,window:0..<2,occurrences:[corrected],lexemes:[Lexeme(id:"なだ",expression:"なだ",definitions:["corrected fixture"])],manualBoundaries:false)
                 try state.applyCorrection(proposal)
                 state.basicWords.insert("に")
+                if ProcessInfo.processInfo.arguments.contains("--pitch-fixture"),let first=state.occurrences.first {
+                    state.lexemes[first.lexemeID]=Lexeme(id:first.lexemeID,expression:"食べる",reading:"たべる",definitions:["to eat"])
+                    state.occurrences[0].selected=true
+                }
                 model.update{$0=state};model.openPhoto(page.id);return model
             }
             var second=page; second.id="second-fixture-page"; state.captures.append(second)
